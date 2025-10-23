@@ -1,4 +1,4 @@
-# Domino
+# FuseX (Domino/TileFlow)
 
 ## Prerequisite
 1. Python >= 3.8
