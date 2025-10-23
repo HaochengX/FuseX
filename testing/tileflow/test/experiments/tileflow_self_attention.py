@@ -49,6 +49,7 @@ def replay(logfile, hw_id, batch, num_heads, seq_len, hidden, metric_type, debug
 
 
 def replay_config(config, hw_id, batch, num_heads, seq_len, hidden, metric_type, debug=False, resource_check=True, define_tiling_space=True):
+    # hw = [(3, get_cloud_small()), (3, get_cloud_large())]
     hw = [(2, get_edge_small()), (3, get_cloud_small())]
     levels = hw[hw_id][0]
     hw_config = acc.tileflow_accelerator_generator(
@@ -60,19 +61,35 @@ def replay_config(config, hw_id, batch, num_heads, seq_len, hidden, metric_type,
                            config, metric_type, resource_check=resource_check, debug=debug)
     return perf
 
+# shapes = [(12, 512, 768)]
 
 shapes = [
     # (num_heads, seq_len, hidden)
-    (8, 512, 512),  # Bert-Small
-    (12, 512, 768),  # Bert-Base
-    (16, 512, 1024),  # Bert-Large
-    (12, 256, 768),  # ViT-Base/14
-    (16, 256, 1024),  # ViT-Large/14
-    (16, 256, 1280),  # ViT-Huge/14
-    (12, 196, 768),  # ViT-Base/16
-    (16, 196, 1024),  # ViT-Large/16
-    (16, 196, 1280),  # ViT-Huge/16
+    # (8, 512, 512),  # Bert-Small
+    # (12, 512, 768),  # Bert-Base
+    # (16, 512, 1024),  # Bert-Large
+    # (12, 256, 768),  # ViT-Base/14
+    # (16, 256, 1024),  # ViT-Large/14
+    # (16, 256, 1280),  # ViT-Huge/14
+    # (12, 196, 768),  # ViT-Base/16
+    # (16, 196, 1024),  # ViT-Large/16
+    # (16, 196, 1280),  # ViT-Huge/16
+    (12, 512, 768),# 'Bert-Base',
+    (16, 512, 1024),# 'Bert-Large',
+    (12, 256, 768),# 'ViT-Base/14',
+    # (16, 256, 1024): 'ViT-Large/14',
+    (16, 256, 1280),# 'ViT-Huge/14',
+    (12, 196, 768),# 'ViT-Base/16',
+    # (16, 196, 1024): 'ViT-Large/16',
+    (16, 196, 1280),# 'ViT-Huge/16',
+    (32, 128 , 4096),# 'Llama3-128',
+    (32, 512 , 4096),# 'Llama3-512',
+    (32, 1024 , 4096),# 'Llama3-1024',
+    (24, 128 , 1024),# 'GPT-3 Medium',
+    (24, 512 , 1024),# 'GPT-3 Medium',
+    (24, 1024 , 1024),# 'GPT-3 Medium',
 ]
+
 
 
 """example
@@ -91,7 +108,7 @@ if __name__ == "__main__":
     parser.add_argument("--number", type=int,
                         help="Number of shapes evaluated [1]", default=1)
     parser.add_argument("--trials", type=int,
-                        help="Tuning trials [1000]", default=100)
+                        help="Tuning trials [1000]", default=10)
     parser.add_argument("--debug", default=False, action="store_true")
     parser.add_argument("--check_resource", default=False, action="store_true")
     parser.add_argument("--define_tiling_space",

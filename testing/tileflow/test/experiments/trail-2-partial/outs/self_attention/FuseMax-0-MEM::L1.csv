@@ -1,0 +1,2 @@
+batch,seq_len,num_heads,hidden,metric,hw_id,MEM::L1
+1,512,12,768,1e9/latency,0,0.816

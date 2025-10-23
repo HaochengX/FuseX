@@ -1,0 +1,4 @@
+batch,seq_len,num_heads,hidden,metric,hw_id,Cycle
+1,128,32,4096,1e9/latency,12,131072
+1,512,32,4096,1e9/latency,12,3145728
+1,1024,32,4096,1e9/latency,12,8388608

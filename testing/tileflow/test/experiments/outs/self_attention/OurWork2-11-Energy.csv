@@ -1,0 +1,4 @@
+batch,seq_len,num_heads,hidden,metric,hw_id,Energy
+1,128,32,4096,1e9/latency,11,2198980000000.0
+1,512,32,4096,1e9/latency,11,31297000000000.0
+1,1024,32,4096,1e9/latency,11,124462000000000.0

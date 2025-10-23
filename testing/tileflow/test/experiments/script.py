@@ -21,7 +21,7 @@ def kernel(wkl, args, params):
         err = os.system(cmd)
         if err: return 
     
-    for hw_id in [0,1]:
+    for hw_id in range(10):
         for metric in __METRICS__:
             output_file = f'outs/{wkl}/{name}-{hw_id}-{metric}.csv'
             cmd = f'python metric_analysis.py --wkl {wkl} --file {logfile} --hw_id {hw_id} --metric {metric} > {output_file}'
@@ -48,7 +48,7 @@ def run(wkl, dataflows, shapes, params):
         values = []
         keys = []
         for name, _, _ in dataflows:
-            for hw_id in [0,1]:
+            for hw_id in range(10):
                 for metric in __METRICS__:
                     if not os.path.exists(f'outs/{wkl}/{name}-{hw_id}-{metric}.csv'):
                         print (f'[ERROR] running {name} {hw_id} {metric}', file=sys.stderr)
@@ -65,77 +65,88 @@ def run(wkl, dataflows, shapes, params):
     
     df = pd.read_csv(f'csvs/{wkl}.csv')
     
-    for hw_id, hw_name in enumerate(['Edge', 'Cloud']):
-        for metric in __METRICS__:
-            ddff = df[df['Architecture'] == hw_id]
-            ddff = ddff[ddff['metric'] == metric][['Dataflow', metric, 'Shape']]
-            ddff = ddff.set_index(['Shape', 'Dataflow'])[metric].unstack()
-            # print (ddff)
-            ax = ddff.plot.bar(rot = 45)
-            ax.set_title(f'{wkl}-{hw_name}-{metric}')
-            ax.get_figure().savefig(f'pics/{wkl}/' + hw_name + f'-{metric}' + '.png', bbox_inches = 'tight')
-
+    # for hw_id, hw_name in ['4*4','8*8','16*16','32*32','64*64','128*128','256*256']:
+    #     for metric in __METRICS__:
+    #         ddff = df[df['Architecture'] == hw_id]
+    #         ddff = ddff[ddff['metric'] == metric][['Dataflow', metric, 'Shape']]
+    #         ddff = ddff.set_index(['Shape', 'Dataflow'])[metric].unstack()
+    #         # print (ddff)
+    #         ax = ddff.plot.bar(rot = 45)
+    #         ax.set_title(f'{wkl}-{hw_name}-{metric}')
+    #         ax.get_figure().savefig(f'pics/{wkl}/' + hw_name + f'-{metric}' + '.png', bbox_inches = 'tight')
 
 _params = {
     'self_attention': {
         'dataflows': [
-        ('Naive', 'no_fuse_self_attention.py', None),
-        ('UniPipe', 'flat_dataflow.py', 'bgran'),
-        ('FLAT-HGran', 'flat_dataflow.py', 'hgran'),
-        ('FLAT-RGran', 'flat_dataflow.py', 'rgran'),
-        ('Chimera', 'chimera_self_attention.py', None),
-        ('TileFlow', 'tileflow_self_attention.py', None)
+        # ('No_Fuse', 'no_fuse_self_attention.py', None),
+        # ('FLAT-BGran', 'flat_dataflow.py', 'bgran'),
+        # ('FLAT-HGran', 'flat_dataflow.py', 'hgran'),
+        # ('FLAT-RGran', 'flat_dataflow.py', 'rgran'),
+        # ('Chimera', 'chimera_self_attention.py', None),
+        # ('TileFlow', 'tileflow_self_attention.py', None),
+        # ('FuseMax','fuse_max.py', None),
+        # ('OurWork','ourwork.py', None),
+        ('OurWork2','ourwork2.py',None),
+        # ('Ourwork_qk','ourwork_qk.py',None),
+        # ('Ourwork_softmax','ourwork_softmax.py',None)
     ],  
         'shapes': {
         # (num_heads, seq_len, hidden)
-        (8, 512, 512): 'Bert-Small',
-        (12, 512, 768): 'Bert-Base',
-        (16, 512, 1024): 'Bert-Large',
-        (12, 256, 768): 'ViT-Base/14',
-        (16, 256, 1024): 'ViT-Large/14',
-        (16, 256, 1280): 'ViT-Huge/14',
-        (12, 196, 768): 'ViT-Base/16',
-        (16, 196, 1024): 'ViT-Large/16',
-        (16, 196, 1280): 'ViT-Huge/16'
+        # (8, 512, 512): 'Bert-Small',
+        # (12, 512, 768): 'Bert-Base',
+        # (16, 512, 1024): 'Bert-Large',
+        # (12, 256, 768): 'ViT-Base/14',
+        # # (16, 256, 1024): 'ViT-Large/14',
+        # (16, 256, 1280): 'ViT-Huge/14',
+        # (12, 196, 768): 'ViT-Base/16',
+        # # (16, 196, 1024): 'ViT-Large/16',
+        # (16, 196, 1280): 'ViT-Huge/16',
+        (32, 128 , 4096): 'Llama3-128',
+        (32, 512 , 4096): 'Llama3-512',
+        (32, 1024 , 4096): 'Llama3-1024',
+        # (24, 128 , 1024): 'GPT-3-128',
+        # (24, 512 , 1024): 'GPT-3-512',
+        # (24, 1024 , 1024): 'GPT-3-1024',
         },
         'params': ''
-    },
-    
-    'conv1x1': {
-        'dataflows': [
-            ('Naive', 'no_fuse_conv_chain.py', None),
-            ('Fused-Layer', 'fused_layer_dataflow.py', None),
-            ('ISOS', 'isos_dataflow.py', None),
-            ('TileFlow', 'tileflow_conv.py', None)
-        ],
-        'shapes': {
-            # (in_channel, height, width, out_channel_1, out_channel_2)
-            (64, 112, 112, 192, 128): 'Yolo',
-            (32, 147, 147, 64, 80): 'Inception-V3',
-            (64, 56, 56, 128, 64): 'Darknet-19-0',
-            (128, 28, 28, 256, 128): 'Darknet-19-1',
-            (16, 227, 227, 64, 16): 'Squeezenet-V1.1'
-        },
-        'params': '--layout nhwc',
-    },
-    
-    'conv3x3': {
-        'dataflows': [
-            ('Naive', 'no_fuse_conv_chain.py', None),
-            ('Fused-Layer', 'fused_layer_dataflow.py', None),
-            ('ISOS', 'isos_dataflow.py', None),
-            ('TileFlow', 'tileflow_conv.py', None)
-        ],
-        'shapes': {
-            # (in_channel, height, width, out_channel_1, out_channel_2)
-            (64, 112, 112, 192, 128): 'Yolo',
-            (32, 147, 147, 64, 80): 'Inception-V3',
-            (64, 56, 56, 128, 64): 'Darknet-19-0',
-            (128, 28, 28, 256, 128): 'Darknet-19-1',
-            (16, 227, 227, 64, 16): 'Squeezenet-V1.1'
-        },
-        'params': '--layout nhwc --second_kernel_size 3',
     }
+    # ,
+    
+    # 'conv1x1': {
+    #     'dataflows': [
+    #         ('Naive', 'no_fuse_conv_chain.py', None),
+    #         ('Fused-Layer', 'fused_layer_dataflow.py', None),
+    #         ('ISOS', 'isos_dataflow.py', None),
+    #         ('TileFlow', 'tileflow_conv.py', None)
+    #     ],
+    #     'shapes': {
+    #         # (in_channel, height, width, out_channel_1, out_channel_2)
+    #         (64, 112, 112, 192, 128): 'Yolo',
+    #         (32, 147, 147, 64, 80): 'Inception-V3',
+    #         (64, 56, 56, 128, 64): 'Darknet-19-0',
+    #         (128, 28, 28, 256, 128): 'Darknet-19-1',
+    #         (16, 227, 227, 64, 16): 'Squeezenet-V1.1'
+    #     },
+    #     'params': '--layout nhwc',
+    # },
+    
+    # 'conv3x3': {
+    #     'dataflows': [
+    #         ('Naive', 'no_fuse_conv_chain.py', None),
+    #         ('Fused-Layer', 'fused_layer_dataflow.py', None),
+    #         ('ISOS', 'isos_dataflow.py', None),
+    #         ('TileFlow', 'tileflow_conv.py', None)
+    #     ],
+    #     'shapes': {
+    #         # (in_channel, height, width, out_channel_1, out_channel_2)
+    #         (64, 112, 112, 192, 128): 'Yolo',
+    #         (32, 147, 147, 64, 80): 'Inception-V3',
+    #         (64, 56, 56, 128, 64): 'Darknet-19-0',
+    #         (128, 28, 28, 256, 128): 'Darknet-19-1',
+    #         (16, 227, 227, 64, 16): 'Squeezenet-V1.1'
+    #     },
+    #     'params': '--layout nhwc --second_kernel_size 3',
+    # }
 }
 
 def main(workload):
