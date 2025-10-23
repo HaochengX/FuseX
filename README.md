@@ -6,8 +6,8 @@
 
 ## Download
 ```sh
-git clone git@github.com:KnowingNothing/Domino.git
-cd Domino
+git clone git@github.com:HaochengX/FuseX.git
+cd FuseX
 git submodule update --init --recursive
 ```
 
