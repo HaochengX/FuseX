@@ -76,6 +76,9 @@ def self_attention_dataflow_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, 
                                 tA[b, h, m, l] = tA[b, h, m, l] + \
                                     tQ[b, h, m, k] * tK[b, h, k, l]
 
+                        tB[b, h, m] = dir.max(tB_max[b, h, m], tA[b, h, m, l])
+
+
                 with ctx.tile("L2", [b1, h1, m1], "Spatial"):
                     tB_max[b, h, m] = -32768;  # Initialize running max
                     tE_sum[b, h, m] = 0     # Initialize running sum_exp
