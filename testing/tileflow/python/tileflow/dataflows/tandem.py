@@ -68,74 +68,79 @@ def self_attention_dataflow_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, 
 
     with ctx.tile("L2", [b2, h2, m2, l3], "Temporal"):
         with ctx.sequential():
-            with ctx.tile("L2", [b1, h1, m1], "Spatial"):
-                with ctx.tile("L1", [b0, h0, m0, l2, k2], "Temporal"):
-                    with ctx.tile("L1", [l1, k1], "Spatial"):
-                        with ctx.tile("L0", [l0, k0], "Temporal"):
-                            tA[b, h, m, l] = tA[b, h, m, l] + \
-                                tQ[b, h, m, k] * tK[b, h, k, l]
-                
-                
-                tB[b, h, m] = dir.max(tB_max[b, h, m], tA[b, h, m, l])
-
             with ctx.pipeline():
                 with ctx.tile("L2", [b1, h1, m1], "Spatial"):
-                    tB_max[b, h, m] = -32768;  # Initialize running max
-                    tE_sum[b, h, m] = 0     # Initialize running sum_exp
-
-                    # Iterative processing over l
+                    with ctx.tile("L1", [b0, h0, m0, l2, k2], "Temporal"):
+                        with ctx.tile("L1", [l1, k1], "Spatial"):
+                            with ctx.tile("L0", [l0, k0], "Temporal"):
+                                tA[b, h, m, l] = tA[b, h, m, l] + \
+                                    tQ[b, h, m, k] * tK[b, h, k, l]
+                
+                
+                with ctx.tile("L2", [b1, h1, m1], "Spatial"):
+                    # L1 temporal tiling: Remove k dimension, focus on sequence length reduction operations
                     with ctx.tile("L1", [b0, h0, m0, l2], "Temporal"):
+                        # L1 spatial tiling: Parallel reduction along sequence length dimension
+                        with ctx.tile("L1", [l1], "Spatial"):
+                            # L0 temporal tiling: Element-wise max operations
+                            with ctx.tile("L0", [l0], "Temporal"):
+                                tB[b, h, m] = dir.max(
+                                    tB[b, h, m], tA[b, h, m, l])
+
+            # with ctx.pipeline():
+            with ctx.tile("L2", [b1, h1, m1], "Spatial"):
+                # tB_max[b, h, m] = -32768;  # Initialize running max
+                tE_sum[b, h, m] = 0     # Initialize running sum_exp
+                # Iterative processing over l
+                with ctx.tile("L1", [b0, h0, m0, l2], "Temporal"):
+                    with ctx.sequential():
+                        with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):
+                                # Update max for numerical stability
+                                tB_max[b, h, m] = dir.max(tB_max[b, h, m], tA[b, h, m, l])
+                        with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):
+                                # Subtract max for numerical stability
+                                tC[b, h, m, l] = tA[b, h, m, l] - tB_max[b, h, m]
                         with ctx.sequential():
                             with ctx.tile("L1", [b0, h0, m0], "Spatial"):
                                 with ctx.tile("L0", [l0], "Temporal"):
-                                    # Update max for numerical stability
-                                    tB_max[b, h, m] = dir.max(tB_max[b, h, m], tA[b, h, m, l])
-
+                                    # Compute exp 
+                                    tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
                             with ctx.tile("L1", [b0, h0, m0], "Spatial"):
                                 with ctx.tile("L0", [l0], "Temporal"):
-                                    # Subtract max for numerical stability
-                                    tC[b, h, m, l] = tA[b, h, m, l] - tB_max[b, h, m]
-                            with ctx.sequential():
-                                with ctx.tile("L1", [b0, h0, m0], "Spatial"):
-                                    with ctx.tile("L0", [l0], "Temporal"):
-                                        # Compute exp 
-                                        tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
-                                with ctx.tile("L1", [b0, h0, m0], "Spatial"):
-                                    with ctx.tile("L0", [l0], "Temporal"):
-                                        # Compute exp 
-                                        tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
-                                with ctx.tile("L1", [b0, h0, m0], "Spatial"):
-                                    with ctx.tile("L0", [l0], "Temporal"):
-                                        # Compute exp 
-                                        tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
-                                with ctx.tile("L1", [b0, h0, m0], "Spatial"):
-                                    with ctx.tile("L0", [l0], "Temporal"):
-                                        # Compute exp 
-                                        tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
-                                with ctx.tile("L1", [b0, h0, m0], "Spatial"):
-                                    with ctx.tile("L0", [l0], "Temporal"):
-                                        # Compute exp 
-                                        tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
-                                with ctx.tile("L1", [b0, h0, m0], "Spatial"):
-                                    with ctx.tile("L0", [l0], "Temporal"):
-                                        # Compute exp 
-                                        tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
-                            with ctx.tile("L1", [b0, h0, m0], "Spatial"):
-                                with ctx.tile("L0", [l0], "Temporal"):        
-                                    #Update running sum_exp
-                                    tE_sum[b, h, m] = tE_sum[b, h, m] + tD[b, h, m, l]
-
+                                    # Compute exp 
+                                    tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
                             with ctx.tile("L1", [b0, h0, m0], "Spatial"):
                                 with ctx.tile("L0", [l0], "Temporal"):
-                                    # Normalize
-                                    tF[b, h, m, l] = tD[b, h, m, l] / tE_sum[b, h, m]
-                with ctx.tile("L2", [b1, h1, m1], "Spatial"):
-                    with ctx.tile("L1", [b0, h0, m0, n2, l2], "Temporal"):
-                        with ctx.tile("L1", [n1, l1], "Spatial"):
-                            with ctx.tile("L0", [n0, l0], "Temporal"):
-                                tG[b, h, m, n] = tG[b, h, m, n] + \
-                                    tF[b, h, m, l] * tV[b, h, l, n]
-
+                                    # Compute exp 
+                                    tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
+                            with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                                with ctx.tile("L0", [l0], "Temporal"):
+                                    # Compute exp 
+                                    tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
+                            with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                                with ctx.tile("L0", [l0], "Temporal"):
+                                    # Compute exp 
+                                    tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
+                            with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                                with ctx.tile("L0", [l0], "Temporal"):
+                                    # Compute exp 
+                                    tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
+                        with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):        
+                                #Update running sum_exp
+                                tE_sum[b, h, m] = tE_sum[b, h, m] + tD[b, h, m, l]
+                        with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):
+                                # Normalize
+                                tF[b, h, m, l] = tD[b, h, m, l] / tE_sum[b, h, m]
+            with ctx.tile("L2", [b1, h1, m1], "Spatial"):
+                with ctx.tile("L1", [b0, h0, m0, n2, l2], "Temporal"):
+                    with ctx.tile("L1", [n1, l1], "Spatial"):
+                        with ctx.tile("L0", [n0, l0], "Temporal"):
+                            tG[b, h, m, n] = tG[b, h, m, n] + \
+                                tF[b, h, m, l] * tV[b, h, l, n]
     return [tG], [b, h, m, n, k, l]
 
 
