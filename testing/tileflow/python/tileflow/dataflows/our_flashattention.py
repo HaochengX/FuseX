@@ -79,61 +79,61 @@ def self_attention_dataflow_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, 
                     
                     with ctx.tile("L1", [b0, h0, m0, l2, k2, n2], "Temporal"):
                         #! S=Q_i @ K_i, compute attention scores for this tile
-                        with ctx.pipeline():
-                            with ctx.tile("L1", [l1, k1], "Spatial"):
-                                with ctx.tile("L0", [l0, k0], "Temporal"):
-                                    tA[b, h, m, l] = tA[b, h, m, l] + \
-                                        tQ[b, h, m, k] * tK[b, h, k, l]
+                        #with ctx.pipeline():
+                        with ctx.tile("L1", [l1, k1], "Spatial"):
+                            with ctx.tile("L0", [l0, k0], "Temporal"):
+                                tA[b, h, m, l] = tA[b, h, m, l] + \
+                                    tQ[b, h, m, k] * tK[b, h, k, l]
 
-                            #! M_new = max(M_old, row_max(S_i))
-                            # Compute local maximum for current tile
-                            with ctx.tile("L1", [l1], "Spatial"):
-                                with ctx.tile("L0", [l0], "Temporal"):
-                                    tB[b, h, m] = dir.max(tB[b, h, m], tA[b, h, m, l])
+                        #! M_new = max(M_old, row_max(S_i))
+                        # Compute local maximum for current tile
+                        with ctx.tile("L1", [l1], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):
+                                tB[b, h, m] = dir.max(tB[b, h, m], tA[b, h, m, l])
                     
-                            # Update global maximum: M_new = max(M_old, M_local)
-                            tB[b, h, m] = dir.max(tB[b, h, m], tB_update_max[b, h, m])
+                        # Update global maximum: M_new = max(M_old, M_local)
+                        tB[b, h, m] = dir.max(tB[b, h, m], tB_update_max[b, h, m])
                         
-                            #! Compute correction factor: exp(M_old - M_new)
-                            tE[b, h, m] = dir.exp(tB_update_max[b, h, m] - tB[b, h, m])
+                        #! Compute correction factor: exp(M_old - M_new)
+                        tE[b, h, m] = dir.exp(tB_update_max[b, h, m] - tB[b, h, m])
                         
-                            #! Scale previous output and accumulate: O = O * correction_factor + P @ V
-                            # First, scale previous output by correction factor
-                            with ctx.tile("L1", [n1], "Spatial"):
-                                with ctx.tile("L0", [n0], "Temporal"):
-                                    tG[b, h, m, n] = tG[b, h, m, n] * tE[b, h, m]
+                        #! Scale previous output and accumulate: O = O * correction_factor + P @ V
+                        # First, scale previous output by correction factor
+                        with ctx.tile("L1", [n1], "Spatial"):
+                            with ctx.tile("L0", [n0], "Temporal"):
+                                tG[b, h, m, n] = tG[b, h, m, n] * tE[b, h, m]
                         
-                            #! Update denominator: denom = denom * correction_factor
-                            denom[b, h, m] = denom[b, h, m] * tE[b, h, m]
+                        #! Update denominator: denom = denom * correction_factor
+                        denom[b, h, m] = denom[b, h, m] * tE[b, h, m]
                         
-                            #! M'=S_i - M_new (subtract new maximum for stability)
-                            with ctx.tile("L1", [l1], "Spatial"):
-                                with ctx.tile("L0", [l0], "Temporal"):  
-                                    tC[b, h, m, l] = tA[b, h, m, l] - tB[b, h, m]
+                        #! M'=S_i - M_new (subtract new maximum for stability)
+                        with ctx.tile("L1", [l1], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):  
+                                tC[b, h, m, l] = tA[b, h, m, l] - tB[b, h, m]
 
-                            #! P = exp(M') = exp(S_i - M_new)
-                            with ctx.tile("L1", [l1], "Spatial"):
-                                with ctx.tile("L0", [l0], "Temporal"):
-                                    tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
+                        #! P = exp(M') = exp(S_i - M_new)
+                        with ctx.tile("L1", [l1], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):
+                                tD[b, h, m, l] = dir.exp(tC[b, h, m, l])
                         
-                            #! Update denominator: denom = denom + sum(P)
-                            with ctx.tile("L1", [l1], "Spatial"):
-                                with ctx.tile("L0", [l0], "Temporal"):
-                                    tE_sum[b, h, m] = tE_sum[b, h, m] + tD[b, h, m, l]
+                        #! Update denominator: denom = denom + sum(P)
+                        with ctx.tile("L1", [l1], "Spatial"):
+                            with ctx.tile("L0", [l0], "Temporal"):
+                                tE_sum[b, h, m] = tE_sum[b, h, m] + tD[b, h, m, l]
                         
-                            denom[b, h, m] = denom[b, h, m] + tE_sum[b, h, m]
+                        denom[b, h, m] = denom[b, h, m] + tE_sum[b, h, m]
                         
-                            # Reset tE_sum for next tile
-                            tE_sum[b, h, m] = 0
+                        # Reset tE_sum for next tile
+                        tE_sum[b, h, m] = 0
                         
-                            #! Then accumulate current tile's contribution: O += P @ V
-                            with ctx.tile("L1", [n1, l1], "Spatial"):
-                                with ctx.tile("L0", [n0, l0], "Temporal"):
-                                    tG[b, h, m, n] = tG[b, h, m, n] + \
-                                        tD[b, h, m, l] * tV[b, h, l, n]
+                        #! Then accumulate current tile's contribution: O += P @ V
+                        with ctx.tile("L1", [n1, l1], "Spatial"):
+                            with ctx.tile("L0", [n0, l0], "Temporal"):
+                                tG[b, h, m, n] = tG[b, h, m, n] + \
+                                    tD[b, h, m, l] * tV[b, h, l, n]
                         
-                            # Update running maximum for next iteration
-                            tB_update_max[b, h, m] = tB[b, h, m]
+                        # Update running maximum for next iteration
+                        tB_update_max[b, h, m] = tB[b, h, m]
                         
                 #! Final normalization: O = O / denom
                 with ctx.tile("L2", [b1, h1, m1], "Spatial"):
