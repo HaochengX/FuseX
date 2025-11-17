@@ -26,6 +26,8 @@ import tileflow.dataflows as td
 import domino.accelerator as acc
 import argparse
 import json
+import csv
+from datetime import datetime
 
 
 def run(levels, hw_config, fusion_strategy, batch, num_heads, seq_len, hidden, trials, metric_type,
@@ -243,49 +245,86 @@ if __name__ == "__main__":
             print("\nTry running with --debug flag for more information.")
             exit(1)
 
-        # Print summary results
+        # Generate timestamp for filenames
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Save detailed results to CSV
+        detailed_csv = f"attention_results_detailed_{timestamp}.csv"
+        with open(detailed_csv, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['batch', 'seq_len', 'num_heads', 'hidden', 'metric',
+                           'hw_name', 'fusion_strategy', 'hw_id', 'config_key', 'performance'])
+
+            for shape, shape_name, results in results_for_shape:
+                if len(results) == 0:
+                    continue
+                for res in results:
+                    perf, key, config, hw_name, fusion_strategy, hw_id = res
+                    # Handle perf if it's a dict (extract numeric value)
+                    perf_value = perf if isinstance(perf, (int, float)) else str(perf)
+                    writer.writerow([
+                        batch, shape[1], shape[0], shape[2], metric_type,
+                        hw_name, fusion_strategy, hw_id, key, perf_value
+                    ])
+
+        print(f"\n✓ Detailed results saved to: {detailed_csv}")
+
+        # Save comparison summary to CSV
+        summary_csv = f"attention_results_summary_{timestamp}.csv"
+        with open(summary_csv, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['model_name', 'num_heads', 'seq_len', 'hidden',
+                           'hw_name', 'fusion_strategy', 'performance', 'speedup_vs_baseline'])
+
+            for shape, shape_name, results in results_for_shape:
+                if len(results) == 0:
+                    continue
+
+                # Find baseline performance for comparison
+                baseline_perf = None
+                for res in results:
+                    perf, key, config, hw_name, fusion_strategy, hw_id = res
+                    if 'baseline' in hw_name:
+                        # Handle perf if it's a dict
+                        baseline_perf = perf if isinstance(perf, (int, float)) else None
+                        break
+
+                for res in results:
+                    perf, key, config, hw_name, fusion_strategy, hw_id = res
+                    # Handle perf if it's a dict
+                    perf_value = perf if isinstance(perf, (int, float)) else None
+
+                    if perf_value is not None and baseline_perf is not None and baseline_perf > 0:
+                        speedup = perf_value / baseline_perf
+                    else:
+                        speedup = 1.0
+
+                    writer.writerow([
+                        shape_name, shape[0], shape[1], shape[2],
+                        hw_name, fusion_strategy, perf_value if perf_value else 'N/A', speedup
+                    ])
+
+        print(f"✓ Summary results saved to: {summary_csv}")
+
+        # Print quick summary to console
         print("\n" + "="*80)
-        print("RESULTS SUMMARY")
+        print("QUICK SUMMARY")
         print("="*80)
-        print("batch,seq_len,num_heads,hidden,metric,hw_name,fusion_strategy,hw_id,key,config,perf")
 
         for shape, shape_name, results in results_for_shape:
             if len(results) == 0:
-                continue
-            for res in results:
-                perf, key, config, hw_name, fusion_strategy, hw_id = res
-                print(
-                    f"{batch},{shape[1]},{shape[0]},{shape[2]},{metric_type},"
-                    f"{hw_name},{fusion_strategy},{hw_id},{key},{config},{perf}")
-
-        # Print comparison table
-        print("\n" + "="*80)
-        print("PERFORMANCE COMPARISON")
-        print("="*80)
-
-        for shape, shape_name, results in results_for_shape:
-            if len(results) == 0:
-                print(f"\nModel: {shape_name} - No valid results")
+                print(f"\n{shape_name}: No valid results")
                 continue
 
-            print(f"\nModel: {shape_name} (heads={shape[0]}, seq_len={shape[1]}, hidden={shape[2]})")
-            print("-" * 80)
-            print(f"{'Hardware':<25} {'Fusion':<20} {'Performance':<15} {'Speedup vs Baseline'}")
-            print("-" * 80)
-
-            # Find baseline performance for comparison
-            baseline_perf = None
+            print(f"\n{shape_name}:")
             for res in results:
                 perf, key, config, hw_name, fusion_strategy, hw_id = res
-                if 'baseline' in hw_name:
-                    baseline_perf = perf
-                    break
-
-            for res in results:
-                perf, key, config, hw_name, fusion_strategy, hw_id = res
-                speedup = perf / baseline_perf if baseline_perf and baseline_perf > 0 else 1.0
-                print(f"{hw_name:<25} {fusion_strategy:<20} {perf:<15.2f} {speedup:.2f}x")
+                perf_value = perf if isinstance(perf, (int, float)) else 'N/A'
+                print(f"  {hw_name:25s} {fusion_strategy:20s} {perf_value}")
 
         print("\n" + "="*80)
         print("Experiment completed successfully!")
+        print(f"Results saved to:")
+        print(f"  - {detailed_csv}")
+        print(f"  - {summary_csv}")
         print("="*80)

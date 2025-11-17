@@ -44,6 +44,8 @@ import tileflow.dataflows as td
 import domino.accelerator as acc
 import argparse
 import json
+import csv
+from datetime import datetime
 
 
 def run(levels, hw_config, fusion_strategy, batch, num_heads, seq_len, hidden, ff_dim, trials, metric_type,
@@ -200,44 +202,106 @@ if __name__ == "__main__":
         print("\nTry: --trials=100 or higher")
         exit(1)
 
-    # Print results summary
+    # Generate timestamp for filenames
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Save detailed results to CSV
+    detailed_csv = f"transformer_results_detailed_{timestamp}.csv"
+    with open(detailed_csv, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['batch', 'seq_len', 'num_heads', 'hidden', 'ff_dim', 'metric',
+                       'hw_name', 'fusion_strategy', 'hw_id', 'config_key', 'performance'])
+
+        for shape, shape_name, results in results_for_shape:
+            if len(results) == 0:
+                continue
+            for res in results:
+                perf, key, config, hw_name, fusion_strategy, hw_id = res
+                # Handle perf if it's a dict
+                perf_value = perf if isinstance(perf, (int, float)) else str(perf)
+                writer.writerow([
+                    args.batch, shape[1], shape[0], shape[2], shape[3],
+                    args.metric, hw_name, fusion_strategy, hw_id, key, perf_value
+                ])
+
+    print(f"\n✓ Detailed results saved to: {detailed_csv}")
+
+    # Save fusion benefit analysis to CSV
+    analysis_csv = f"transformer_fusion_analysis_{timestamp}.csv"
+    with open(analysis_csv, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['model_name', 'num_heads', 'seq_len', 'hidden', 'ff_dim',
+                       'fusion_strategy', 'hw_name', 'performance',
+                       'speedup_vs_baseline', 'speedup_vs_attn_only',
+                       'softmax_fusion_benefit', 'layernorm_gelu_benefit', 'total_benefit'])
+
+        for shape, shape_name, results in results_for_shape:
+            if len(results) == 0:
+                continue
+
+            # Build performance map
+            perf_map = {}
+            hw_map = {}
+            for res in results:
+                perf, key, config, hw_name, fusion_strategy, hw_id = res
+                # Handle perf if it's a dict
+                perf_value = perf if isinstance(perf, (int, float)) else None
+                perf_map[fusion_strategy] = perf_value
+                hw_map[fusion_strategy] = hw_name
+
+            no_fusion_perf = perf_map.get('no_fusion')
+            attention_only_perf = perf_map.get('attention_only_fusion')
+            full_fusion_perf = perf_map.get('full_fusion')
+
+            # Calculate benefits
+            if (no_fusion_perf and attention_only_perf and full_fusion_perf and
+                no_fusion_perf > 0 and attention_only_perf > 0):
+                attn_benefit = attention_only_perf / no_fusion_perf
+                layernorm_gelu_benefit = full_fusion_perf / attention_only_perf
+                total_benefit = full_fusion_perf / no_fusion_perf
+            else:
+                attn_benefit = layernorm_gelu_benefit = total_benefit = None
+
+            for res in results:
+                perf, key, config, hw_name, fusion_strategy, hw_id = res
+                perf_value = perf if isinstance(perf, (int, float)) else None
+
+                if perf_value is not None:
+                    vs_baseline = perf_value / no_fusion_perf if no_fusion_perf and no_fusion_perf > 0 else 1.0
+                    vs_attn = perf_value / attention_only_perf if attention_only_perf and attention_only_perf > 0 else 1.0
+                else:
+                    vs_baseline = vs_attn = None
+
+                writer.writerow([
+                    shape_name, shape[0], shape[1], shape[2], shape[3],
+                    fusion_strategy, hw_name,
+                    perf_value if perf_value else 'N/A',
+                    vs_baseline if vs_baseline else 'N/A',
+                    vs_attn if vs_attn else 'N/A',
+                    attn_benefit if attn_benefit else 'N/A',
+                    layernorm_gelu_benefit if layernorm_gelu_benefit else 'N/A',
+                    total_benefit if total_benefit else 'N/A'
+                ])
+
+    print(f"✓ Fusion analysis saved to: {analysis_csv}")
+
+    # Print quick summary to console
     print("\n" + "="*80)
-    print("RESULTS SUMMARY")
+    print("FUSION BENEFIT SUMMARY")
     print("="*80)
-    print("batch,seq_len,num_heads,hidden,ff_dim,metric,hw_name,fusion_strategy,hw_id,perf")
 
     for shape, shape_name, results in results_for_shape:
         if len(results) == 0:
             continue
-        for res in results:
-            perf, key, config, hw_name, fusion_strategy, hw_id = res
-            print(
-                f"{args.batch},{shape[1]},{shape[0]},{shape[2]},{shape[3]},"
-                f"{args.metric},{hw_name},{fusion_strategy},{hw_id},{perf}")
 
-    # Print fusion benefit analysis
-    print("\n" + "="*80)
-    print("FUSION BENEFIT ANALYSIS")
-    print("="*80)
+        print(f"\n{shape_name}:")
 
-    for shape, shape_name, results in results_for_shape:
-        if len(results) == 0:
-            continue
-
-        print(f"\nModel: {shape_name}")
-        print("-" * 80)
-        print(f"{'Strategy':<30} {'Hardware':<20} {'Perf':<15} {'vs Baseline':<15} {'vs Attn-Only'}")
-        print("-" * 80)
-
-        # Find baseline and attention-only performance
-        no_fusion_perf = None
-        attention_only_perf = None
-        full_fusion_perf = None
-
+        # Build performance map
         perf_map = {}
         for res in results:
             perf, key, config, hw_name, fusion_strategy, hw_id = res
-            perf_map[fusion_strategy] = perf
+            perf_value = perf if isinstance(perf, (int, float)) else None
+            perf_map[fusion_strategy] = perf_value
 
         no_fusion_perf = perf_map.get('no_fusion')
         attention_only_perf = perf_map.get('attention_only_fusion')
@@ -245,26 +309,28 @@ if __name__ == "__main__":
 
         for res in results:
             perf, key, config, hw_name, fusion_strategy, hw_id = res
-
-            vs_baseline = perf / no_fusion_perf if no_fusion_perf and no_fusion_perf > 0 else 1.0
-            vs_attn = perf / attention_only_perf if attention_only_perf and attention_only_perf > 0 else 1.0
-
-            print(f"{fusion_strategy:<30} {hw_name:<20} {perf:<15.2f} {vs_baseline:<15.2f}x {vs_attn:.2f}x")
+            perf_value = perf if isinstance(perf, (int, float)) else 'N/A'
+            print(f"  {fusion_strategy:30s} {hw_name:20s} {perf_value}")
 
         # Print key insights
-        if no_fusion_perf and attention_only_perf and full_fusion_perf:
+        if (no_fusion_perf and attention_only_perf and full_fusion_perf and
+            isinstance(no_fusion_perf, (int, float)) and
+            isinstance(attention_only_perf, (int, float)) and
+            isinstance(full_fusion_perf, (int, float))):
             print()
-            print("KEY INSIGHTS:")
+            print("  KEY INSIGHTS:")
             attn_benefit = attention_only_perf / no_fusion_perf
             layernorm_gelu_benefit = full_fusion_perf / attention_only_perf
             total_benefit = full_fusion_perf / no_fusion_perf
 
-            print(f"  1. Softmax fusion benefit:           {attn_benefit:.2f}x")
-            print(f"  2. LayerNorm+GELU fusion benefit:    {layernorm_gelu_benefit:.2f}x")
-            print(f"  3. Total UniFlow benefit:            {total_benefit:.2f}x")
-            print()
-            print(f"  UniFlow advantage = {layernorm_gelu_benefit:.2f}x beyond previous work!")
+            print(f"    1. Softmax fusion benefit:           {attn_benefit:.2f}x")
+            print(f"    2. LayerNorm+GELU fusion benefit:    {layernorm_gelu_benefit:.2f}x")
+            print(f"    3. Total UniFlow benefit:            {total_benefit:.2f}x")
+            print(f"    → UniFlow advantage = {layernorm_gelu_benefit:.2f}x beyond previous work!")
 
     print("\n" + "="*80)
-    print("Experiment completed!")
+    print("Experiment completed successfully!")
+    print(f"Results saved to:")
+    print(f"  - {detailed_csv}")
+    print(f"  - {analysis_csv}")
     print("="*80)
