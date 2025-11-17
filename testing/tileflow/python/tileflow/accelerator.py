@@ -1690,21 +1690,17 @@ def get_uniflow_attention_edge(L1_BW=500, L2_BW=25):
     - We model this by adding multiple ALU types to each PE
     - The alu_class "unified" represents PEs with both MAC and elementwise capabilities
     """
-    # Unified ALU supporting both GEMM and non-GEMM operations
+    # Unified MAC supporting all operations (GEMM and non-GEMM)
+    # TileFlow implicitly handles different operation types (max, exp, div, etc.)
     MAC = acc.ALU(name="mac", alu_class="intmac",
                   datawidth=16, meshX=32*32, instance=32*32)
-
-    # Additional ALU for non-GEMM operations (max, exp, div, etc.)
-    # In unified architecture, these are part of the same PE
-    NonGEMM_ALU = acc.ALU(name="nongemm_alu", alu_class="vector",
-                          datawidth=16, meshX=32*32, instance=32*32)
 
     # Larger register file to hold intermediate results from both op types
     Reg = acc.Buffer(name="L0", instance=32*32, buffer_class="regfile", block_size=12, depth=1,
                      meshX=32*32, word_bits=16, technology="16nm", read_bandwidth=4, write_bandwidth=4)
 
     PE = acc.Engine(name="PE")
-    PE.add_local(Reg, MAC, NonGEMM_ALU)  # Both ALUs in same PE
+    PE.add_local(Reg, MAC)  # Single MAC handles all operations
 
     # L1 SRAM - unified buffer for all operation types
     L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=4000,
@@ -1737,20 +1733,17 @@ def get_uniflow_attention_cloud(L1_BW=4000, L2_BW=800, L3_BW=160):
     - All attention operations execute on same PE array
     - Three-level memory hierarchy
     """
-    # Unified MAC for GEMM
+    # Unified MAC for all operations (GEMM and non-GEMM)
+    # TileFlow implicitly handles different operation types
     MAC = acc.ALU(name="mac", alu_class="intmac",
                   datawidth=16, meshX=256*256, instance=256*256)
-
-    # Non-GEMM ALU in same PE
-    NonGEMM_ALU = acc.ALU(name="nongemm_alu", alu_class="vector",
-                          datawidth=16, meshX=256*256, instance=256*256)
 
     # Enhanced register file for unified operations
     Reg = acc.Buffer(name="L0", instance=256*256, buffer_class="regfile", block_size=80, depth=1,
                      meshX=256*256, word_bits=16, technology="16nm", read_bandwidth=4, write_bandwidth=4)
 
     PE = acc.Engine(name="PE")
-    PE.add_local(Reg, MAC, NonGEMM_ALU)
+    PE.add_local(Reg, MAC)
 
     L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=20000,
                     word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW*0.4, technology="16nm")
@@ -1816,7 +1809,8 @@ def get_uniflow_partition_edge(gemm_ratio=0.75, L1_BW=500, L2_BW=25):
     PE_GEMM.add_local(Reg_GEMM, MAC_GEMM)
 
     # Non-GEMM Block: Dedicated PEs for softmax, layernorm, elementwise ops
-    ALU_NonGEMM = acc.ALU(name="alu_nongemm", alu_class="vector",
+    # Also uses intmac - TileFlow handles operation types implicitly
+    ALU_NonGEMM = acc.ALU(name="alu_nongemm", alu_class="intmac",
                           datawidth=16, meshX=nongemm_pes, instance=nongemm_pes)
 
     Reg_NonGEMM = acc.Buffer(name="L0_NonGEMM", instance=nongemm_pes, buffer_class="regfile",
@@ -1884,7 +1878,8 @@ def get_uniflow_partition_cloud(gemm_ratio=0.75, L1_BW=4000, L2_BW=800, L3_BW=16
     PE_GEMM.add_local(Reg_GEMM, MAC_GEMM)
 
     # Non-GEMM Block
-    ALU_NonGEMM = acc.ALU(name="alu_nongemm", alu_class="vector",
+    # Also uses intmac - TileFlow handles operation types implicitly
+    ALU_NonGEMM = acc.ALU(name="alu_nongemm", alu_class="intmac",
                           datawidth=16, meshX=nongemm_pes, instance=nongemm_pes)
 
     Reg_NonGEMM = acc.Buffer(name="L0_NonGEMM", instance=nongemm_pes, buffer_class="regfile",
