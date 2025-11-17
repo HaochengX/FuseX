@@ -14,3 +14,5 @@ from .from_scratch_conv_chain import get_from_scratch_conv_chain_dataflow
 from .attention_fusion_strategies import get_attention_fusion_dataflow
 from .transformer_block_fusion import get_transformer_block_dataflow
 from .our_work_2 import get_ourwork_2_self_attention_dataflow
+from .attention_pe_partition import get_attention_partition_dataflow
+from .attention_kv_cache import get_attention_kv_cache_dataflow

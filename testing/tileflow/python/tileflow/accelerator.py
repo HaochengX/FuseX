@@ -21,7 +21,9 @@ __all__ = ["get_edge_small", "get_cloud_small",
            # Attention-specific accelerators for paper
            "get_baseline_attention_edge", "get_baseline_attention_cloud",
            "get_tpu_attention_edge", "get_tpu_attention_cloud",
-           "get_uniflow_attention_edge", "get_uniflow_attention_cloud"]
+           "get_uniflow_attention_edge", "get_uniflow_attention_cloud",
+           # PE Partition accelerators
+           "get_uniflow_partition_edge", "get_uniflow_partition_cloud"]
 
 
 def get_edge_small(L1_BW=500, L2_BW=25, L3_BW=None):
@@ -1773,5 +1775,153 @@ def get_uniflow_attention_cloud(L1_BW=4000, L2_BW=800, L3_BW=160):
     Core.add_local(L3)
 
     Acc = acc.TileFlowAccelerator(name="uniflow_attention_cloud", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+
+def get_uniflow_partition_edge(gemm_ratio=0.75, L1_BW=500, L2_BW=25):
+    """
+    UniFlow with PE Partition (edge-scale): Spatial partitioning of PE array
+
+    Architecture:
+    - Total 32x32 = 1024 PEs, spatially partitioned into two blocks:
+      * GEMM Block: gemm_ratio of PEs (e.g., 75% = 768 PEs) for matrix multiplication
+      * Non-GEMM Block: (1-gemm_ratio) of PEs (e.g., 25% = 256 PEs) for softmax/layernorm
+    - Both blocks share L1 SRAM for data exchange
+    - Enables pipelining: GEMM block works on tile i+1 while non-GEMM block processes tile i
+
+    Key advantage over unified UniFlow:
+    - Better resource utilization through spatial parallelism
+    - GEMM and non-GEMM operations execute concurrently
+    - Reduced idle time compared to temporal pipelining
+
+    Args:
+        gemm_ratio: Fraction of PEs dedicated to GEMM (default 0.75)
+        L1_BW: L1 SRAM bandwidth in GB/s
+        L2_BW: L2 DRAM bandwidth in GB/s
+    """
+    total_pes = 32 * 32  # 1024 total PEs
+    gemm_pes = int(total_pes * gemm_ratio)
+    nongemm_pes = total_pes - gemm_pes
+
+    # GEMM Block: Dedicated PEs for matrix multiplication
+    MAC_GEMM = acc.ALU(name="mac_gemm", alu_class="intmac",
+                       datawidth=16, meshX=gemm_pes, instance=gemm_pes)
+
+    Reg_GEMM = acc.Buffer(name="L0_GEMM", instance=gemm_pes, buffer_class="regfile",
+                          block_size=8, depth=1, meshX=gemm_pes, word_bits=16,
+                          technology="16nm", read_bandwidth=3, write_bandwidth=3)
+
+    PE_GEMM = acc.Engine(name="PE_GEMM")
+    PE_GEMM.add_local(Reg_GEMM, MAC_GEMM)
+
+    # Non-GEMM Block: Dedicated PEs for softmax, layernorm, elementwise ops
+    ALU_NonGEMM = acc.ALU(name="alu_nongemm", alu_class="vector",
+                          datawidth=16, meshX=nongemm_pes, instance=nongemm_pes)
+
+    Reg_NonGEMM = acc.Buffer(name="L0_NonGEMM", instance=nongemm_pes, buffer_class="regfile",
+                             block_size=12, depth=1, meshX=nongemm_pes, word_bits=16,
+                             technology="16nm", read_bandwidth=4, write_bandwidth=4)
+
+    PE_NonGEMM = acc.Engine(name="PE_NonGEMM")
+    PE_NonGEMM.add_local(Reg_NonGEMM, ALU_NonGEMM)
+
+    # Shared L1 SRAM - both PE blocks access this for data exchange
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=4000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW/2.5,
+                    technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=4, meshX=4)
+    Buffer.add_level(PE_GEMM)
+    Buffer.add_level(PE_NonGEMM)  # Both PE types at same level
+    Buffer.add_local(L1)
+
+    # L2 DRAM
+    L2 = acc.Buffer(name="L2", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L2_BW, write_bandwidth=L2_BW/2.5,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Buffer)
+    Core.add_local(L2)
+
+    Acc = acc.TileFlowAccelerator(name="uniflow_partition_edge", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+
+def get_uniflow_partition_cloud(gemm_ratio=0.75, L1_BW=4000, L2_BW=800, L3_BW=160):
+    """
+    UniFlow with PE Partition (cloud-scale): Spatial partitioning of PE array
+
+    Architecture:
+    - Total 256x256 = 65536 PEs, spatially partitioned:
+      * GEMM Block: gemm_ratio of PEs (e.g., 75% = 49152 PEs)
+      * Non-GEMM Block: (1-gemm_ratio) of PEs (e.g., 25% = 16384 PEs)
+    - Shared L1 SRAM for inter-block communication
+    - Three-level memory hierarchy
+    - Concurrent execution of GEMM and non-GEMM operations
+
+    Args:
+        gemm_ratio: Fraction of PEs for GEMM (default 0.75)
+        L1_BW: L1 SRAM bandwidth
+        L2_BW: L2 SRAM bandwidth
+        L3_BW: L3 DRAM bandwidth
+    """
+    total_pes = 256 * 256  # 65536 total PEs
+    gemm_pes = int(total_pes * gemm_ratio)
+    nongemm_pes = total_pes - gemm_pes
+
+    # GEMM Block
+    MAC_GEMM = acc.ALU(name="mac_gemm", alu_class="intmac",
+                       datawidth=16, meshX=gemm_pes, instance=gemm_pes)
+
+    Reg_GEMM = acc.Buffer(name="L0_GEMM", instance=gemm_pes, buffer_class="regfile",
+                          block_size=60, depth=1, meshX=gemm_pes, word_bits=16,
+                          technology="16nm", read_bandwidth=3, write_bandwidth=3)
+
+    PE_GEMM = acc.Engine(name="PE_GEMM")
+    PE_GEMM.add_local(Reg_GEMM, MAC_GEMM)
+
+    # Non-GEMM Block
+    ALU_NonGEMM = acc.ALU(name="alu_nongemm", alu_class="vector",
+                          datawidth=16, meshX=nongemm_pes, instance=nongemm_pes)
+
+    Reg_NonGEMM = acc.Buffer(name="L0_NonGEMM", instance=nongemm_pes, buffer_class="regfile",
+                             block_size=80, depth=1, meshX=nongemm_pes, word_bits=16,
+                             technology="16nm", read_bandwidth=4, write_bandwidth=4)
+
+    PE_NonGEMM = acc.Engine(name="PE_NonGEMM")
+    PE_NonGEMM.add_local(Reg_NonGEMM, ALU_NonGEMM)
+
+    # Shared L1 SRAM
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=20000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW*0.4,
+                    technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=16, meshX=16)
+    Buffer.add_level(PE_GEMM)
+    Buffer.add_level(PE_NonGEMM)
+    Buffer.add_local(L1)
+
+    # L2 SRAM
+    L2 = acc.Buffer(name="L2", buffer_class="SRAM", width=16, sizeKB=40000,
+                    word_bits=16, read_bandwidth=L2_BW, write_bandwidth=L2_BW*0.4,
+                    technology="16nm")
+
+    Cache = acc.Engine(name="Cache", instance=4, meshX=4)
+    Cache.add_level(Buffer)
+    Cache.add_local(L2)
+
+    # L3 DRAM
+    L3 = acc.Buffer(name="L3", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L3_BW, write_bandwidth=L3_BW*0.4,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Cache)
+    Core.add_local(L3)
+
+    Acc = acc.TileFlowAccelerator(name="uniflow_partition_cloud", version=0.2)
     Acc.set_hardware_level(Core)
     return Acc
