@@ -191,12 +191,13 @@ def attention_partial_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len,
                     name="G", dtype="int16", ctx=ctx)
 
     if define_tiling_space:
-        ctx.define_split(b, nparts=3)
-        ctx.define_split(h, nparts=3)
+        # Reduced split levels for 2-level hierarchy to avoid mapping conflicts
+        ctx.define_split(b, nparts=2)
+        ctx.define_split(h, nparts=2)
         ctx.define_split(n, nparts=2)
         ctx.define_split(k, nparts=2)
-        ctx.define_split(m, nparts=3)
-        ctx.define_split(l, nparts=3)
+        ctx.define_split(m, nparts=2)
+        ctx.define_split(l, nparts=2)
 
         factors_m = ctx.get_split(m)
         factors_l = ctx.get_split(l)
@@ -205,12 +206,13 @@ def attention_partial_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len,
         factors_n = ctx.get_split(n)
         factors_k = ctx.get_split(k)
     else:
-        factors_b = [dir.Var("int32") for i in range(3)]
-        factors_h = [dir.Var("int32") for i in range(3)]
-        factors_m = [dir.Var("int32") for i in range(3)]
+        # Use 2 factors for 2-level hierarchy (creates 3 split levels with appended 1)
+        factors_b = [dir.Var("int32") for i in range(2)]
+        factors_h = [dir.Var("int32") for i in range(2)]
+        factors_m = [dir.Var("int32") for i in range(2)]
         factors_n = [dir.Var("int32") for i in range(2)]
         factors_k = [dir.Var("int32") for i in range(2)]
-        factors_l = [dir.Var("int32") for i in range(3)]
+        factors_l = [dir.Var("int32") for i in range(2)]
 
     sub_b = ctx.split(b, factors=factors_b)
     sub_h = ctx.split(h, factors=factors_h)
@@ -224,10 +226,10 @@ def attention_partial_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len,
     m2, m1, m0 = sub_m
     n2, n1, n0 = sub_n
     k2, k1, k0 = sub_k
-    l3, l2, l1, l0 = sub_l
+    l2, l1, l0 = sub_l  # Only 3 split levels now
 
     # Partial fusion via pipelining (models VPU behavior)
-    with ctx.tile("L2", [b2, h2, m2, l3], "Temporal"):
+    with ctx.tile("L2", [b2, h2, m2, l2], "Temporal"):
         with ctx.pipeline():
             # Stage 1: GEMM on systolic array
             with ctx.pipeline():
@@ -313,12 +315,13 @@ def attention_full_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hi
                     name="G", dtype="int16", ctx=ctx)
 
     if define_tiling_space:
-        ctx.define_split(b, nparts=3)
-        ctx.define_split(h, nparts=3)
+        # Reduced split levels for 2-level hierarchy to avoid mapping conflicts
+        ctx.define_split(b, nparts=2)
+        ctx.define_split(h, nparts=2)
         ctx.define_split(n, nparts=2)
         ctx.define_split(k, nparts=2)
-        ctx.define_split(m, nparts=3)
-        ctx.define_split(l, nparts=3)
+        ctx.define_split(m, nparts=2)
+        ctx.define_split(l, nparts=2)
 
         factors_m = ctx.get_split(m)
         factors_l = ctx.get_split(l)
@@ -327,12 +330,13 @@ def attention_full_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hi
         factors_n = ctx.get_split(n)
         factors_k = ctx.get_split(k)
     else:
-        factors_b = [dir.Var("int32") for i in range(3)]
-        factors_h = [dir.Var("int32") for i in range(3)]
-        factors_m = [dir.Var("int32") for i in range(3)]
+        # Use 2 factors for 2-level hierarchy (creates 3 split levels with appended 1)
+        factors_b = [dir.Var("int32") for i in range(2)]
+        factors_h = [dir.Var("int32") for i in range(2)]
+        factors_m = [dir.Var("int32") for i in range(2)]
         factors_n = [dir.Var("int32") for i in range(2)]
         factors_k = [dir.Var("int32") for i in range(2)]
-        factors_l = [dir.Var("int32") for i in range(3)]
+        factors_l = [dir.Var("int32") for i in range(2)]
 
     sub_b = ctx.split(b, factors=factors_b)
     sub_h = ctx.split(h, factors=factors_h)
@@ -346,10 +350,10 @@ def attention_full_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hi
     m2, m1, m0 = sub_m
     n2, n1, n0 = sub_n
     k2, k1, k0 = sub_k
-    l3, l2, l1, l0 = sub_l
+    l2, l1, l0 = sub_l  # Only 3 split levels now
 
     # Full fusion (models unified PE behavior)
-    with ctx.tile("L2", [b2, h2, m2, l3], "Temporal"):
+    with ctx.tile("L2", [b2, h2, m2, l2], "Temporal"):
         with ctx.pipeline():
             # GEMM and non-GEMM can run in parallel on different PEs
             with ctx.parallel():
