@@ -206,17 +206,42 @@ if __name__ == "__main__":
                 print(f"    Levels: {levels}")
 
                 hw_config = acc.tileflow_accelerator_generator(hw_acc)
-                perf, key, config = run(
-                    levels, hw_config, fusion_strategy, batch, num_heads, seq_len, hidden,
-                    trials, metric_type=metric_type, debug=args.debug,
-                    resource_check=args.check_resource, define_tiling_space=args.define_tiling_space)
 
-                results.append((perf, key, config, hw_name, fusion_strategy, hw_id))
+                try:
+                    perf, key, config = run(
+                        levels, hw_config, fusion_strategy, batch, num_heads, seq_len, hidden,
+                        trials, metric_type=metric_type, debug=args.debug,
+                        resource_check=args.check_resource, define_tiling_space=args.define_tiling_space)
 
-                print(f"    Performance: {perf:.2f} {metric_type}")
-                print(f"    Config: {key}")
+                    if perf is None:
+                        print(f"    WARNING: No valid configuration found! Skipping...")
+                        continue
+
+                    results.append((perf, key, config, hw_name, fusion_strategy, hw_id))
+
+                    print(f"    Performance: {perf:.2f} {metric_type}")
+                    print(f"    Config: {key}")
+
+                except Exception as e:
+                    print(f"    ERROR: Tuning failed with error: {e}")
+                    print(f"    Skipping this configuration...")
+                    continue
 
             results_for_shape.append((shape, shape_name, results))
+
+        # Check if we have any results
+        total_results = sum(len(results) for _, _, results in results_for_shape)
+        if total_results == 0:
+            print("\n" + "="*80)
+            print("ERROR: No valid results were collected!")
+            print("="*80)
+            print("\nPossible causes:")
+            print("  1. Trials too low (try --trials=100 or higher)")
+            print("  2. Resource constraints violated (try --check_resource=False)")
+            print("  3. Dataflow import issues")
+            print("  4. Hardware configuration mismatch")
+            print("\nTry running with --debug flag for more information.")
+            exit(1)
 
         # Print summary results
         print("\n" + "="*80)
@@ -225,6 +250,8 @@ if __name__ == "__main__":
         print("batch,seq_len,num_heads,hidden,metric,hw_name,fusion_strategy,hw_id,key,config,perf")
 
         for shape, shape_name, results in results_for_shape:
+            if len(results) == 0:
+                continue
             for res in results:
                 perf, key, config, hw_name, fusion_strategy, hw_id = res
                 print(
@@ -237,6 +264,10 @@ if __name__ == "__main__":
         print("="*80)
 
         for shape, shape_name, results in results_for_shape:
+            if len(results) == 0:
+                print(f"\nModel: {shape_name} - No valid results")
+                continue
+
             print(f"\nModel: {shape_name} (heads={shape[0]}, seq_len={shape[1]}, hidden={shape[2]})")
             print("-" * 80)
             print(f"{'Hardware':<25} {'Fusion':<20} {'Performance':<15} {'Speedup vs Baseline'}")
