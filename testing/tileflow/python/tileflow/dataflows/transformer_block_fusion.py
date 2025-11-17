@@ -725,7 +725,9 @@ def get_transformer_block_dataflow(levels, fusion_strategy, batch, num_heads, se
         N = hidden
         F = ff_dim
 
-        with dir.NameScope(only_capital=True):
+        # Note: Not using only_capital=True because transformer blocks have 35+ unique tensor names
+        # which exceeds the 26 capital letter limit (A-Z)
+        with dir.NameScope():
             tX = dir.Tensor([B, M, N], name="X", dtype="int16", ctx=ctx)
 
             if levels == 2:
