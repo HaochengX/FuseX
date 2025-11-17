@@ -276,15 +276,19 @@ def transformer_block_no_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hidd
 
 def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hidden, ff_dim, define_tiling_space=True):
     """
-    Transformer block with ATTENTION-ONLY fusion (previous work, TPU-style).
+    Transformer block with TPU-style execution (previous work).
 
     Models TPU-like accelerator where:
-    - Attention softmax operations are pipelined/fused on VPU
-    - LayerNorm and GELU still go to CPU (NOT fused)
+    - ALL non-GEMM operations execute on on-chip VPU (not CPU!)
+    - Operations are PIPELINED but NOT fully fused
+    - Each operation is still a separate stage (writes to intermediate buffers)
+
+    Key difference from baseline: On-chip VPU vs off-chip CPU
+    Key difference from UniFlow: Separate stages vs fully fused
 
     This represents the state-of-the-art before UniFlow:
-    - Better than baseline (softmax fusion helps)
-    - Worse than UniFlow (LayerNorm/GELU still go to CPU)
+    - Better than baseline (on-chip VPU vs off-chip CPU)
+    - Worse than UniFlow (separate stages vs fully fused)
     """
     model_k = hidden // num_heads
 
@@ -360,10 +364,10 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
     l3, l2, l1, l0 = ctx.split(l, factors=[*factors_l, 1])
     f2, f1, f0 = ctx.split(f, factors=[*factors_f, 1])
 
-    # ATTENTION-ONLY FUSION
+    # TPU-STYLE: All non-GEMM on VPU (on-chip), but pipelined not fused
     with ctx.sequential():
-        # LayerNorm1 - NOT fused (still separate, goes to CPU)
-        with ctx.sequential():
+        # LayerNorm1 - On VPU (on-chip), but separate stages (pipelined)
+        with ctx.pipeline():
             with ctx.tile("L2", [b2, m2], "Temporal"):
                 with ctx.tile("L2", [b1, m1], "Spatial"):
                     with ctx.tile("L1", [b0, m0, n2], "Temporal"):
@@ -446,7 +450,7 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
                         with ctx.tile("L0", [n0, h0, k0], "Temporal"):
                             tAttnProj[b, m, n] = tAttnProj[b, m, n] + tAttnOut[b, h, m, k] * tWO[h*k, n]
 
-        # Residual - NOT fused (separate)
+        # Residual - On VPU (on-chip), separate stage
         with ctx.tile("L2", [b2, m2], "Temporal"):
             with ctx.tile("L2", [b1, m1], "Spatial"):
                 with ctx.tile("L1", [b0, m0, n2], "Temporal"):
@@ -454,8 +458,8 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
                         with ctx.tile("L0", [n0], "Temporal"):
                             tResid1[b, m, n] = tX[b, m, n] + tAttnProj[b, m, n]
 
-        # LayerNorm2 - NOT fused (still separate)
-        with ctx.sequential():
+        # LayerNorm2 - On VPU (on-chip), but pipelined separate stages
+        with ctx.pipeline():
             with ctx.tile("L2", [b2, m2], "Temporal"):
                 with ctx.tile("L2", [b1, m1], "Spatial"):
                     with ctx.tile("L1", [b0, m0, n2], "Temporal"):
@@ -485,7 +489,7 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
                         with ctx.tile("L0", [f0, n0], "Temporal"):
                             tFFN1[b, m, f] = tFFN1[b, m, f] + tNorm2[b, m, n] * tW1[n, f]
 
-        # GELU - NOT fused (separate, goes to CPU)
+        # GELU - On VPU (on-chip), separate stage
         with ctx.tile("L2", [b2, m2], "Temporal"):
             with ctx.tile("L2", [b1, m1], "Spatial"):
                 with ctx.tile("L1", [b0, m0, f2], "Temporal"):
@@ -501,7 +505,7 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
                         with ctx.tile("L0", [n0, f0], "Temporal"):
                             tFFN2[b, m, n] = tFFN2[b, m, n] + tGELU[b, m, f] * tW2[f, n]
 
-        # Residual - NOT fused (separate)
+        # Residual - On VPU (on-chip), separate stage
         with ctx.tile("L2", [b2, m2], "Temporal"):
             with ctx.tile("L2", [b1, m1], "Spatial"):
                 with ctx.tile("L1", [b0, m0, n2], "Temporal"):
