@@ -68,9 +68,11 @@ def attention_no_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hidd
                     name="G", dtype="int16", ctx=ctx)
 
     if define_tiling_space:
-        ctx.define_split(n, nparts=2)
-        ctx.define_split(k, nparts=2)
-        ctx.define_split(l, nparts=2)
+        # Increase nparts for better search space coverage
+        # nparts controls how many intermediate factorizations are sampled
+        ctx.define_split(n, nparts=4)  # More granular for hidden dimension
+        ctx.define_split(k, nparts=4)  # More granular for model_k dimension
+        ctx.define_split(l, nparts=4)  # More granular for sequence length
 
         factors_l = ctx.get_split(l)
         factors_n = ctx.get_split(n)
@@ -406,9 +408,11 @@ def attention_no_fusion_3levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hidd
                     name="G", dtype="int16", ctx=ctx)
 
     if define_tiling_space:
-        ctx.define_split(n, nparts=2)
-        ctx.define_split(k, nparts=2)
-        ctx.define_split(l, nparts=2)
+        # Increase nparts for better search space coverage
+        # nparts controls how many intermediate factorizations are sampled
+        ctx.define_split(n, nparts=4)  # More granular for hidden dimension
+        ctx.define_split(k, nparts=4)  # More granular for model_k dimension
+        ctx.define_split(l, nparts=4)  # More granular for sequence length
 
         factors_l = ctx.get_split(l)
         factors_n = ctx.get_split(n)
