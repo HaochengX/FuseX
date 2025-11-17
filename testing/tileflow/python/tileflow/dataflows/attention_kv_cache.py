@@ -383,7 +383,7 @@ def get_attention_kv_cache_dataflow(levels, phase, batch, num_heads, seq_len, hi
         define_tiling_space: Whether to define tiling
 
     Returns:
-        Dataflow context
+        Function that takes ctx and returns (inputs, outputs, loops)
     """
     if levels != 2:
         raise NotImplementedError("Only 2-level hierarchy currently supported for KV-cache dataflows")
@@ -391,43 +391,41 @@ def get_attention_kv_cache_dataflow(levels, phase, batch, num_heads, seq_len, hi
     if cache_strategy not in ["static", "stream"]:
         raise NotImplementedError(f"Cache strategy '{cache_strategy}' not yet implemented. Use 'static' or 'stream'.")
 
-    ctx = dir.MappingContext()
+    def static_attention_kv_cache(ctx):
+        with dir.NameScope(only_capital=True):
+            if phase == "prefill":
+                # Prefill: process entire prompt (same for both static and stream)
+                tQ = dir.Tensor([batch, num_heads, seq_len, hidden], name="Q", dtype="int16", ctx=ctx)
+                tK = dir.Tensor([batch, num_heads, seq_len, hidden], name="K", dtype="int16", ctx=ctx)
+                tV = dir.Tensor([batch, num_heads, seq_len, hidden], name="V", dtype="int16", ctx=ctx)
 
-    if phase == "prefill":
-        # Prefill: process entire prompt (same for both static and stream)
-        tQ = dir.Tensor([batch, num_heads, seq_len, hidden], name="Q", dtype="int16", ctx=ctx)
-        tK = dir.Tensor([batch, num_heads, seq_len, hidden], name="K", dtype="int16", ctx=ctx)
-        tV = dir.Tensor([batch, num_heads, seq_len, hidden], name="V", dtype="int16", ctx=ctx)
+                output, loop_vars = attention_static_kv_cache_prefill_2levels(
+                    ctx, tQ, tK, tV, batch, num_heads, seq_len, hidden, define_tiling_space)
 
-        output, loop_vars = attention_static_kv_cache_prefill_2levels(
-            ctx, tQ, tK, tV, batch, num_heads, seq_len, hidden, define_tiling_space)
+                return [tQ, tK, tV], output, loop_vars
 
-        ctx.set_output(output)
-        ctx.set_loop_var(loop_vars)
-        return ctx
+            elif phase == "decode":
+                # Decode: generate one token
+                if context_len is None:
+                    raise ValueError("context_len must be specified for decode phase")
 
-    elif phase == "decode":
-        # Decode: generate one token
-        if context_len is None:
-            raise ValueError("context_len must be specified for decode phase")
+                tQ_new = dir.Tensor([batch, num_heads, 1, hidden], name="Q_new", dtype="int16", ctx=ctx)
+                tKCache = dir.Tensor([batch, num_heads, context_len, hidden], name="KCache", dtype="int16", ctx=ctx)
+                tVCache = dir.Tensor([batch, num_heads, context_len, hidden], name="VCache", dtype="int16", ctx=ctx)
 
-        tQ_new = dir.Tensor([batch, num_heads, 1, hidden], name="Q_new", dtype="int16", ctx=ctx)
-        tKCache = dir.Tensor([batch, num_heads, context_len, hidden], name="KCache", dtype="int16", ctx=ctx)
-        tVCache = dir.Tensor([batch, num_heads, context_len, hidden], name="VCache", dtype="int16", ctx=ctx)
+                if cache_strategy == "stream":
+                    # Stream-in KV cache with PE partition (requires partition accelerator)
+                    output, loop_vars = attention_stream_kv_cache_decode_2levels(
+                        ctx, tQ_new, tKCache, tVCache, batch, num_heads, context_len, hidden,
+                        kv_chunk_size=64, define_tiling_space=define_tiling_space)
+                else:
+                    # Static KV cache (entire cache in on-chip memory)
+                    output, loop_vars = attention_static_kv_cache_decode_2levels(
+                        ctx, tQ_new, tKCache, tVCache, batch, num_heads, context_len, hidden, define_tiling_space)
 
-        if cache_strategy == "stream":
-            # Stream-in KV cache with PE partition (requires partition accelerator)
-            output, loop_vars = attention_stream_kv_cache_decode_2levels(
-                ctx, tQ_new, tKCache, tVCache, batch, num_heads, context_len, hidden,
-                kv_chunk_size=64, define_tiling_space=define_tiling_space)
-        else:
-            # Static KV cache (entire cache in on-chip memory)
-            output, loop_vars = attention_static_kv_cache_decode_2levels(
-                ctx, tQ_new, tKCache, tVCache, batch, num_heads, context_len, hidden, define_tiling_space)
+                return [tQ_new, tKCache, tVCache], output, loop_vars
 
-        ctx.set_output(output)
-        ctx.set_loop_var(loop_vars)
-        return ctx
+            else:
+                raise ValueError(f"Invalid phase: {phase}. Must be 'prefill' or 'decode'.")
 
-    else:
-        raise ValueError(f"Invalid phase: {phase}. Must be 'prefill' or 'decode'.")
+    return static_attention_kv_cache

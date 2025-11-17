@@ -164,25 +164,24 @@ def get_attention_partition_dataflow(levels, batch, num_heads, seq_len, hidden, 
         define_tiling_space: Whether to define tiling space
 
     Returns:
-        Dataflow context
+        Function that takes ctx and returns (inputs, outputs, loops)
     """
-    if levels == 2:
-        ctx = dir.MappingContext()
-
+    def static_attention_partition(ctx):
         # Input tensors
-        tQ = dir.Tensor([batch, num_heads, seq_len, hidden], name="Q", dtype="int16", ctx=ctx)
-        tK = dir.Tensor([batch, num_heads, seq_len, hidden], name="K", dtype="int16", ctx=ctx)
-        tV = dir.Tensor([batch, num_heads, seq_len, hidden], name="V", dtype="int16", ctx=ctx)
+        with dir.NameScope(only_capital=True):
+            tQ = dir.Tensor([batch, num_heads, seq_len, hidden], name="Q", dtype="int16", ctx=ctx)
+            tK = dir.Tensor([batch, num_heads, seq_len, hidden], name="K", dtype="int16", ctx=ctx)
+            tV = dir.Tensor([batch, num_heads, seq_len, hidden], name="V", dtype="int16", ctx=ctx)
 
-        output, loop_vars = attention_partition_pipeline_2levels(
-            ctx, tQ, tK, tV, batch, num_heads, seq_len, hidden, define_tiling_space)
+            if levels == 2:
+                output, loop_vars = attention_partition_pipeline_2levels(
+                    ctx, tQ, tK, tV, batch, num_heads, seq_len, hidden, define_tiling_space)
+            elif levels == 3:
+                # Cloud version (3-level memory hierarchy)
+                raise NotImplementedError("3-level PE partition dataflow not yet implemented")
+            else:
+                raise ValueError(f"Unsupported levels: {levels}. Must be 2 or 3.")
 
-        ctx.set_output(output)
-        ctx.set_loop_var(loop_vars)
-        return ctx
-    elif levels == 3:
-        # Cloud version (3-level memory hierarchy)
-        # Similar structure but with L3 DRAM level
-        raise NotImplementedError("3-level PE partition dataflow not yet implemented")
-    else:
-        raise ValueError(f"Unsupported levels: {levels}. Must be 2 or 3.")
+            return [tQ, tK, tV], output, loop_vars
+
+    return static_attention_partition
