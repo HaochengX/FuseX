@@ -76,12 +76,12 @@ def run_attention_partition(levels, hw_config, batch, num_heads, seq_len, hidden
 
 
 def run_attention_kv_cache(levels, hw_config, phase, batch, num_heads, seq_len, hidden,
-                            context_len, trials, metric_type, debug=False, resource_check=True,
+                            context_len, cache_strategy, trials, metric_type, debug=False, resource_check=True,
                             define_tiling_space=False):
     """Run attention with KV-cache awareness"""
     dataflow = td.get_attention_kv_cache_dataflow(
         levels, phase, batch, num_heads, seq_len, hidden,
-        cache_strategy="static", context_len=context_len, define_tiling_space=define_tiling_space)
+        cache_strategy=cache_strategy, context_len=context_len, define_tiling_space=define_tiling_space)
 
     best_perf, best_key, best_config = tuning(
         hw_config, dataflow, [], trials, metric_type,
@@ -200,13 +200,14 @@ def run_experiments(args):
                         # Decode: Generate one token with KV-cache
                         context_len = seq_len  # Assume we've already generated seq_len tokens
 
-                        # Use KV-cache dataflow
+                        # Use appropriate KV-cache strategy based on partition support
+                        cache_strategy = "stream" if supports_partition else "static"
                         perf, key, config = run_attention_kv_cache(
                             levels, hw_config, "decode", args.batch, num_heads, 1, hidden,
-                            context_len, args.trials, args.metric, args.debug, args.check_resource,
+                            context_len, cache_strategy, args.trials, args.metric, args.debug, args.check_resource,
                             args.define_tiling_space)
-                        variant = "kv_cache"
-                        phase_info = f"decode_ctx{context_len}"
+                        variant = f"kv_{cache_strategy}"
+                        phase_info = f"decode_{cache_strategy}_ctx{context_len}"
 
                     elif args.phase == "both":
                         # Run both prefill and decode
@@ -220,11 +221,12 @@ def run_experiments(args):
                                 levels, hw_config, fusion_strategy, args.batch, num_heads, seq_len, hidden,
                                 args.trials, args.metric, args.debug, args.check_resource, args.define_tiling_space)
 
-                        # Decode
+                        # Decode (with appropriate KV-cache strategy)
                         context_len = seq_len
+                        cache_strategy = "stream" if supports_partition else "static"
                         perf_decode, key_decode, _ = run_attention_kv_cache(
                             levels, hw_config, "decode", args.batch, num_heads, 1, hidden,
-                            context_len, args.trials, args.metric, args.debug, args.check_resource,
+                            context_len, cache_strategy, args.trials, args.metric, args.debug, args.check_resource,
                             args.define_tiling_space)
 
                         # Store both results
@@ -236,6 +238,7 @@ def run_experiments(args):
                             'hw_name': hw_name,
                             'fusion_strategy': fusion_strategy,
                             'supports_partition': supports_partition,
+                            'cache_strategy': 'none',  # Prefill doesn't use cache
                             'phase': 'prefill',
                             'performance': perf_prefill if isinstance(perf_prefill, (int, float)) else 'N/A',
                             'config_key': key_prefill,
@@ -248,13 +251,14 @@ def run_experiments(args):
                             'hw_name': hw_name,
                             'fusion_strategy': fusion_strategy,
                             'supports_partition': supports_partition,
+                            'cache_strategy': cache_strategy,  # 'stream' or 'static'
                             'phase': 'decode',
                             'performance': perf_decode if isinstance(perf_decode, (int, float)) else 'N/A',
                             'config_key': key_decode,
                         })
 
                         print(f"      Prefill: {perf_prefill if isinstance(perf_prefill, (int, float)) else 'N/A'}")
-                        print(f"      Decode:  {perf_decode if isinstance(perf_decode, (int, float)) else 'N/A'}")
+                        print(f"      Decode ({cache_strategy}):  {perf_decode if isinstance(perf_decode, (int, float)) else 'N/A'}")
                         continue
 
                     else:
@@ -312,13 +316,21 @@ def print_additive_analysis(results, metric):
     print("ADDITIVE BENEFIT ANALYSIS")
     print(f"{'='*80}")
 
-    # Group by model and sequence length
+    # Group by model, sequence length, and phase
     grouped = {}
     for r in results:
-        key = (r['model'], r['seq_len'], r['phase'])
+        phase = r.get('phase', 'unknown')
+        cache_strategy = r.get('cache_strategy', 'none')
+        key = (r['model'], r['seq_len'], phase)
         if key not in grouped:
             grouped[key] = {}
-        grouped[key][r['hw_name']] = r['performance']
+
+        # Create unique identifier that includes cache strategy for decode
+        hw_key = r['hw_name']
+        if phase == 'decode' and cache_strategy != 'none':
+            hw_key = f"{hw_key}_{cache_strategy}"
+
+        grouped[key][hw_key] = r['performance']
 
     for (model, seq_len, phase), hw_perfs in grouped.items():
         print(f"\n{model} @ seq_len={seq_len}, phase={phase}")
@@ -338,28 +350,51 @@ def print_additive_analysis(results, metric):
                 speedups[hw_name] = float(perf) / baseline_perf
 
         # Print in order of increasing capability
-        order = ['baseline', 'tpu', 'uniflow', 'uniflow_partition']
+        if phase == 'decode':
+            order = ['baseline', 'tpu', 'uniflow', 'uniflow_partition_static', 'uniflow_partition_stream']
+        else:
+            order = ['baseline', 'tpu', 'uniflow', 'uniflow_partition']
+
         for prefix in order:
             for hw_name, speedup in speedups.items():
                 if prefix in hw_name:
-                    print(f"  {hw_name:30s}  {speedup:6.2f}x")
+                    print(f"  {hw_name:40s}  {speedup:6.2f}x")
 
         # Calculate additive benefits
         tpu_perf = hw_perfs.get('tpu_edge') or hw_perfs.get('tpu_cloud')
         uniflow_perf = hw_perfs.get('uniflow_edge') or hw_perfs.get('uniflow_cloud')
-        partition_perf = hw_perfs.get('uniflow_partition_edge') or hw_perfs.get('uniflow_partition_cloud')
 
+        if phase == 'decode':
+            partition_static_perf = hw_perfs.get('uniflow_partition_edge_static') or hw_perfs.get('uniflow_partition_cloud_static')
+            partition_stream_perf = hw_perfs.get('uniflow_partition_edge_stream') or hw_perfs.get('uniflow_partition_cloud_stream')
+        else:
+            partition_perf = hw_perfs.get('uniflow_partition_edge') or hw_perfs.get('uniflow_partition_cloud')
+
+        print()
         if tpu_perf and tpu_perf != 'N/A' and uniflow_perf and uniflow_perf != 'N/A':
             fusion_benefit = float(uniflow_perf) / float(tpu_perf)
-            print(f"\n  Fusion benefit (UniFlow vs TPU): {fusion_benefit:.2f}x")
+            print(f"  1. Fusion benefit (UniFlow vs TPU):        {fusion_benefit:.2f}x")
 
-        if partition_perf and partition_perf != 'N/A' and uniflow_perf and uniflow_perf != 'N/A':
-            partition_benefit = float(partition_perf) / float(uniflow_perf)
-            print(f"  Partition benefit (Partition vs UniFlow): {partition_benefit:.2f}x")
+        if phase == 'decode':
+            if partition_static_perf and partition_static_perf != 'N/A' and uniflow_perf and uniflow_perf != 'N/A':
+                partition_benefit = float(partition_static_perf) / float(uniflow_perf)
+                print(f"  2. Partition benefit (vs UniFlow):         {partition_benefit:.2f}x")
 
-        if partition_perf and partition_perf != 'N/A':
-            total_benefit = float(partition_perf) / baseline_perf
-            print(f"  Total benefit (Partition vs Baseline): {total_benefit:.2f}x")
+            if partition_stream_perf and partition_stream_perf != 'N/A' and partition_static_perf and partition_static_perf != 'N/A':
+                stream_benefit = float(partition_stream_perf) / float(partition_static_perf)
+                print(f"  3. KV-Stream benefit (vs static):          {stream_benefit:.2f}x")
+
+            if partition_stream_perf and partition_stream_perf != 'N/A':
+                total_benefit = float(partition_stream_perf) / baseline_perf
+                print(f"  → Total benefit (Stream vs Baseline):     {total_benefit:.2f}x")
+        else:
+            if partition_perf and partition_perf != 'N/A' and uniflow_perf and uniflow_perf != 'N/A':
+                partition_benefit = float(partition_perf) / float(uniflow_perf)
+                print(f"  2. Partition benefit (vs UniFlow):         {partition_benefit:.2f}x")
+
+            if partition_perf and partition_perf != 'N/A':
+                total_benefit = float(partition_perf) / baseline_perf
+                print(f"  → Total benefit (Partition vs Baseline):  {total_benefit:.2f}x")
 
 
 if __name__ == "__main__":
