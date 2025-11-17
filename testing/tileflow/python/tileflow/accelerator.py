@@ -17,7 +17,11 @@ __all__ = ["get_edge_small", "get_cloud_small",
            "get_edge_small_80","get_edge_small_60","get_edge_small_40","get_edge_small_20","get_edge_small_10",
            "get_cloud_small_20_40","get_cloud_small_20_80","get_cloud_small_20_120","get_cloud_small_20_160",
            "get_cloud_small_20_200","get_cloud_small_40_40","get_cloud_small_40_80","get_cloud_small_40_120",
-           "get_cloud_small_40_160","get_cloud_small_40_200"]
+           "get_cloud_small_40_160","get_cloud_small_40_200",
+           # Attention-specific accelerators for paper
+           "get_baseline_attention_edge", "get_baseline_attention_cloud",
+           "get_tpu_attention_edge", "get_tpu_attention_cloud",
+           "get_uniflow_attention_edge", "get_uniflow_attention_cloud"]
 
 
 def get_edge_small(L1_BW=500, L2_BW=25, L3_BW=None):
@@ -1455,5 +1459,319 @@ def get_cloud_small_40_200(L1_BW=4000, L2_BW=800, L3_BW=160):
     Core.add_level(Cache)
     Core.add_local(L3)
     Acc = acc.TileFlowAccelerator(name="accelerator", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+# ============================================================================
+# Attention-Specific Accelerator Architectures for Paper
+# ============================================================================
+# These accelerators model different approaches to handling non-GEMM operations
+# in self-attention, specifically for comparing:
+# 1. Baseline: Systolic array + CPU (off-chip processing for non-GEMM)
+# 2. TPU-style: Systolic array + VPU (on-chip vector unit for non-GEMM)
+# 3. UniFlow: Unified PE supporting both GEMM and non-GEMM operations
+
+
+def get_baseline_attention_edge(L1_BW=500, L2_BW=25):
+    """
+    Baseline accelerator: Systolic array for GEMM + CPU for non-GEMM operations
+
+    Architecture:
+    - 32x32 systolic array (MAC units) for matrix multiplication
+    - Non-GEMM ops (max, exp, div, etc.) must be sent to CPU via DRAM
+    - Models off-chip data movement penalty for non-GEMM operations
+
+    Use case: Traditional systolic array accelerators without on-chip support
+    for elementwise/reduction operations
+    """
+    # Standard MAC units for GEMM operations
+    MAC = acc.ALU(name="mac", alu_class="intmac",
+                  datawidth=16, meshX=32*32, instance=32*32)
+
+    # Register file at PE level
+    Reg = acc.Buffer(name="L0", instance=32*32, buffer_class="regfile", block_size=6, depth=1,
+                     meshX=32*32, word_bits=16, technology="16nm", read_bandwidth=3, write_bandwidth=3)
+
+    PE = acc.Engine(name="PE")
+    PE.add_local(Reg, MAC)
+
+    # L1 SRAM - local buffer for GEMM operands/results
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=4000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW/2.5, technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=4, meshX=4)
+    Buffer.add_level(PE)
+    Buffer.add_local(L1)
+
+    # L2 DRAM - models CPU access (non-GEMM ops processed here)
+    # Lower bandwidth simulates off-chip communication penalty
+    L2 = acc.Buffer(name="L2", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L2_BW, write_bandwidth=L2_BW/2.5,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Buffer)
+    Core.add_local(L2)
+
+    Acc = acc.TileFlowAccelerator(name="baseline_attention_edge", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+
+def get_baseline_attention_cloud(L1_BW=4000, L2_BW=800, L3_BW=160):
+    """
+    Baseline accelerator (cloud-scale): Systolic array for GEMM + CPU for non-GEMM
+
+    Architecture:
+    - 256x256 systolic array for matrix multiplication
+    - Non-GEMM ops sent to CPU via DRAM (L3)
+    - Three-level memory hierarchy
+    """
+    MAC = acc.ALU(name="mac", alu_class="intmac",
+                  datawidth=16, meshX=256*256, instance=256*256)
+
+    Reg = acc.Buffer(name="L0", instance=256*256, buffer_class="regfile", block_size=60, depth=1,
+                     meshX=256*256, word_bits=16, technology="16nm", read_bandwidth=3, write_bandwidth=3)
+
+    PE = acc.Engine(name="PE")
+    PE.add_local(Reg, MAC)
+
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=20000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW*0.4, technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=16, meshX=16)
+    Buffer.add_level(PE)
+    Buffer.add_local(L1)
+
+    L2 = acc.Buffer(name="L2", buffer_class="SRAM", width=16, sizeKB=40000,
+                    word_bits=16, read_bandwidth=L2_BW, write_bandwidth=L2_BW*0.4, technology="16nm")
+
+    Cache = acc.Engine(name="Cache", instance=4, meshX=4)
+    Cache.add_level(Buffer)
+    Cache.add_local(L2)
+
+    # L3 DRAM - CPU processes non-GEMM ops here
+    L3 = acc.Buffer(name="L3", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L3_BW, write_bandwidth=L3_BW*0.4,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Cache)
+    Core.add_local(L3)
+
+    Acc = acc.TileFlowAccelerator(name="baseline_attention_cloud", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+
+def get_tpu_attention_edge(L1_BW=500, L1_VPU_BW=400, L2_BW=25):
+    """
+    TPU-style accelerator: Systolic array for GEMM + on-chip VPU for non-GEMM
+
+    Architecture:
+    - 32x32 systolic array (MAC units) for matrix multiplication
+    - Dedicated on-chip VPU buffer (modeled as separate L1 region) for non-GEMM ops
+    - On-chip data movement between systolic array and VPU via high-BW interconnect
+
+    Key difference from baseline: Non-GEMM ops stay on-chip with dedicated VPU
+    processing, avoiding off-chip DRAM access
+
+    Memory organization:
+    - L1: Main SRAM for systolic array GEMM operations (500 GB/s)
+    - L1_VPU: On-chip buffer for VPU non-GEMM operations (400 GB/s)
+    - On-chip communication between L1 and L1_VPU
+    """
+    # MAC units for GEMM
+    MAC = acc.ALU(name="mac", alu_class="intmac",
+                  datawidth=16, meshX=32*32, instance=32*32)
+
+    Reg = acc.Buffer(name="L0", instance=32*32, buffer_class="regfile", block_size=6, depth=1,
+                     meshX=32*32, word_bits=16, technology="16nm", read_bandwidth=3, write_bandwidth=3)
+
+    PE = acc.Engine(name="PE")
+    PE.add_local(Reg, MAC)
+
+    # L1 SRAM for systolic array operations
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=4000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW/2.5, technology="16nm")
+
+    # VPU buffer for non-GEMM operations (on-chip, high bandwidth)
+    # Model as additional SRAM at same level to represent on-chip VPU
+    L1_VPU = acc.Buffer(name="L1_VPU", buffer_class="SRAM", width=16, sizeKB=2000,
+                        word_bits=16, read_bandwidth=L1_VPU_BW, write_bandwidth=L1_VPU_BW/2.5,
+                        technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=4, meshX=4)
+    Buffer.add_level(PE)
+    Buffer.add_local(L1, L1_VPU)  # Both L1 and VPU are on-chip
+
+    # L2 DRAM - only for initial data loading and final results
+    L2 = acc.Buffer(name="L2", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L2_BW, write_bandwidth=L2_BW/2.5,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Buffer)
+    Core.add_local(L2)
+
+    Acc = acc.TileFlowAccelerator(name="tpu_attention_edge", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+
+def get_tpu_attention_cloud(L1_BW=4000, L1_VPU_BW=3000, L2_BW=800, L3_BW=160):
+    """
+    TPU-style accelerator (cloud-scale): Systolic array + on-chip VPU
+
+    Architecture:
+    - 256x256 systolic array for GEMM
+    - On-chip VPU for non-GEMM operations
+    - Three-level memory hierarchy with VPU at L1 level
+    """
+    MAC = acc.ALU(name="mac", alu_class="intmac",
+                  datawidth=16, meshX=256*256, instance=256*256)
+
+    Reg = acc.Buffer(name="L0", instance=256*256, buffer_class="regfile", block_size=60, depth=1,
+                     meshX=256*256, word_bits=16, technology="16nm", read_bandwidth=3, write_bandwidth=3)
+
+    PE = acc.Engine(name="PE")
+    PE.add_local(Reg, MAC)
+
+    # L1 SRAM for systolic array
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=20000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW*0.4, technology="16nm")
+
+    # VPU buffer at L1 level (on-chip)
+    L1_VPU = acc.Buffer(name="L1_VPU", buffer_class="SRAM", width=16, sizeKB=10000,
+                        word_bits=16, read_bandwidth=L1_VPU_BW, write_bandwidth=L1_VPU_BW*0.4,
+                        technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=16, meshX=16)
+    Buffer.add_level(PE)
+    Buffer.add_local(L1, L1_VPU)
+
+    L2 = acc.Buffer(name="L2", buffer_class="SRAM", width=16, sizeKB=40000,
+                    word_bits=16, read_bandwidth=L2_BW, write_bandwidth=L2_BW*0.4, technology="16nm")
+
+    Cache = acc.Engine(name="Cache", instance=4, meshX=4)
+    Cache.add_level(Buffer)
+    Cache.add_local(L2)
+
+    L3 = acc.Buffer(name="L3", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L3_BW, write_bandwidth=L3_BW*0.4,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Cache)
+    Core.add_local(L3)
+
+    Acc = acc.TileFlowAccelerator(name="tpu_attention_cloud", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+
+def get_uniflow_attention_edge(L1_BW=500, L2_BW=25):
+    """
+    UniFlow accelerator: Unified PE supporting both GEMM and non-GEMM operations
+
+    Architecture:
+    - 32x32 unified PEs with enhanced ALUs supporting:
+      * GEMM operations (matrix multiplication)
+      * Non-GEMM operations (max, exp, div, sub, add)
+    - All operations execute directly on PE array without offloading
+    - No separate VPU or CPU needed - PEs are multi-functional
+
+    Key innovation: Each PE contains both MAC and non-GEMM functional units,
+    enabling seamless execution of entire attention pipeline on the same hardware
+
+    Implementation note:
+    - We model this by adding multiple ALU types to each PE
+    - The alu_class "unified" represents PEs with both MAC and elementwise capabilities
+    """
+    # Unified ALU supporting both GEMM and non-GEMM operations
+    MAC = acc.ALU(name="mac", alu_class="intmac",
+                  datawidth=16, meshX=32*32, instance=32*32)
+
+    # Additional ALU for non-GEMM operations (max, exp, div, etc.)
+    # In unified architecture, these are part of the same PE
+    NonGEMM_ALU = acc.ALU(name="nongemm_alu", alu_class="vector",
+                          datawidth=16, meshX=32*32, instance=32*32)
+
+    # Larger register file to hold intermediate results from both op types
+    Reg = acc.Buffer(name="L0", instance=32*32, buffer_class="regfile", block_size=12, depth=1,
+                     meshX=32*32, word_bits=16, technology="16nm", read_bandwidth=4, write_bandwidth=4)
+
+    PE = acc.Engine(name="PE")
+    PE.add_local(Reg, MAC, NonGEMM_ALU)  # Both ALUs in same PE
+
+    # L1 SRAM - unified buffer for all operation types
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=4000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW/2.5, technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=4, meshX=4)
+    Buffer.add_level(PE)
+    Buffer.add_local(L1)
+
+    # L2 DRAM - only for initial input/final output
+    L2 = acc.Buffer(name="L2", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L2_BW, write_bandwidth=L2_BW/2.5,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Buffer)
+    Core.add_local(L2)
+
+    Acc = acc.TileFlowAccelerator(name="uniflow_attention_edge", version=0.2)
+    Acc.set_hardware_level(Core)
+    return Acc
+
+
+def get_uniflow_attention_cloud(L1_BW=4000, L2_BW=800, L3_BW=160):
+    """
+    UniFlow accelerator (cloud-scale): Unified PE supporting both GEMM and non-GEMM
+
+    Architecture:
+    - 256x256 unified PEs with both MAC and non-GEMM functional units
+    - All attention operations execute on same PE array
+    - Three-level memory hierarchy
+    """
+    # Unified MAC for GEMM
+    MAC = acc.ALU(name="mac", alu_class="intmac",
+                  datawidth=16, meshX=256*256, instance=256*256)
+
+    # Non-GEMM ALU in same PE
+    NonGEMM_ALU = acc.ALU(name="nongemm_alu", alu_class="vector",
+                          datawidth=16, meshX=256*256, instance=256*256)
+
+    # Enhanced register file for unified operations
+    Reg = acc.Buffer(name="L0", instance=256*256, buffer_class="regfile", block_size=80, depth=1,
+                     meshX=256*256, word_bits=16, technology="16nm", read_bandwidth=4, write_bandwidth=4)
+
+    PE = acc.Engine(name="PE")
+    PE.add_local(Reg, MAC, NonGEMM_ALU)
+
+    L1 = acc.Buffer(name="L1", buffer_class="SRAM", width=16, sizeKB=20000,
+                    word_bits=16, read_bandwidth=L1_BW, write_bandwidth=L1_BW*0.4, technology="16nm")
+
+    Buffer = acc.Engine(name="Buffer", instance=16, meshX=16)
+    Buffer.add_level(PE)
+    Buffer.add_local(L1)
+
+    L2 = acc.Buffer(name="L2", buffer_class="SRAM", width=16, sizeKB=40000,
+                    word_bits=16, read_bandwidth=L2_BW, write_bandwidth=L2_BW*0.4, technology="16nm")
+
+    Cache = acc.Engine(name="Cache", instance=4, meshX=4)
+    Cache.add_level(Buffer)
+    Cache.add_local(L2)
+
+    L3 = acc.Buffer(name="L3", buffer_class="DRAM", technology="16nm",
+                    block_size=32, read_bandwidth=L3_BW, write_bandwidth=L3_BW*0.4,
+                    sizeKB=1600_000_000, word_bits=16)
+
+    Core = acc.Engine(name="System")
+    Core.add_level(Cache)
+    Core.add_local(L3)
+
+    Acc = acc.TileFlowAccelerator(name="uniflow_attention_cloud", version=0.2)
     Acc.set_hardware_level(Core)
     return Acc
