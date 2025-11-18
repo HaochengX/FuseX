@@ -385,11 +385,16 @@ def get_attention_kv_cache_dataflow(levels, phase, batch, num_heads, seq_len, hi
     Returns:
         Function that takes ctx and returns (inputs, outputs, loops)
     """
-    if levels != 2:
-        raise NotImplementedError("Only 2-level hierarchy currently supported for KV-cache dataflows")
+    if levels not in [2, 3]:
+        raise ValueError(f"Unsupported levels: {levels}. Must be 2 or 3.")
 
     if cache_strategy not in ["static", "stream"]:
         raise NotImplementedError(f"Cache strategy '{cache_strategy}' not yet implemented. Use 'static' or 'stream'.")
+
+    # TODO: Implement optimized 3-level versions
+    # For now, use 2-level implementations as fallback for cloud configs
+    if levels == 3:
+        print(f"WARNING: Using 2-level KV-cache dataflow as fallback for 3-level hierarchy (suboptimal)")
 
     def static_attention_kv_cache(ctx):
         with dir.NameScope(only_capital=True):

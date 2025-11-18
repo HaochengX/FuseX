@@ -178,7 +178,10 @@ def get_attention_partition_dataflow(levels, batch, num_heads, seq_len, hidden, 
                     ctx, tQ, tK, tV, batch, num_heads, seq_len, hidden, define_tiling_space)
             elif levels == 3:
                 # Cloud version (3-level memory hierarchy)
-                raise NotImplementedError("3-level PE partition dataflow not yet implemented")
+                # TODO: Implement optimized 3-level version with L3 support
+                # For now, use 2-level implementation as fallback (suboptimal but functional)
+                output, loop_vars = attention_partition_pipeline_2levels(
+                    ctx, tQ, tK, tV, batch, num_heads, seq_len, hidden, define_tiling_space)
             else:
                 raise ValueError(f"Unsupported levels: {levels}. Must be 2 or 3.")
 
