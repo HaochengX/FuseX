@@ -704,7 +704,12 @@ def clip(value, lower, upper):
 
 
 def sqrt(value):
-    value = _to_expr(value)
+    if isinstance(value, TensorView):
+        value = value.as_expr()
+    elif isinstance(value, Loop):
+        value = value.var
+    else:
+        value = _to_expr(value)
     return Call(value.dtype, "sqrt", [value])
 
 
