@@ -229,7 +229,7 @@ def attention_partial_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len,
     l2, l1, l0 = sub_l  # Only 3 split levels now
 
     # Partial fusion via pipelining (models VPU behavior)
-    with ctx.tile("L2", [b2, h2, m2, l2], "Temporal"):
+    with ctx.tile("L2", [b2, h2, m2], "Temporal"):  # Removed l2 from outer tile
         with ctx.pipeline():
             # Stage 1: GEMM on systolic array
             with ctx.pipeline():
@@ -353,7 +353,7 @@ def attention_full_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hi
     l2, l1, l0 = sub_l  # Only 3 split levels now
 
     # Full fusion (models unified PE behavior)
-    with ctx.tile("L2", [b2, h2, m2, l2], "Temporal"):
+    with ctx.tile("L2", [b2, h2, m2], "Temporal"):  # Removed l2 from outer tile
         with ctx.pipeline():
             # GEMM and non-GEMM can run in parallel on different PEs
             with ctx.parallel():
@@ -368,7 +368,7 @@ def attention_full_fusion_2levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hi
                 # Stage 2-6: All non-GEMM ops fully fused on unified PE
                 with ctx.tile("L2", [b1, h1, m1], "Spatial"):
                     with ctx.tile("L1", [b0, h0, m0, l2], "Temporal"):
-                        with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                        with ctx.tile("L1", [l1], "Spatial"):  # Fixed: use l1 instead of repeating b0,h0,m0
                             with ctx.tile("L0", [l0], "Temporal"):
                                 # All operations fused in single scope
                                 tB_max[b, h, m] = dir.max(tB_max[b, h, m], tA[b, h, m, l])
