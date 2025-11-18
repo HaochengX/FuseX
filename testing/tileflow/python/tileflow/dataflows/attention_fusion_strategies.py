@@ -554,9 +554,9 @@ def attention_partial_fusion_3levels(ctx, tQ, tK, tV, batch, num_heads, seq_len,
     l4, l3, l2, l1, l0 = ctx.split(l, factors=[*factors_l, 1])
 
     # Partial fusion via pipeline
-    with ctx.tile("L3", [b4, h4, m4, l4], "Temporal"):
+    with ctx.tile("L3", [b4, h4, m4], "Temporal"):  # Removed l4 to avoid multi-level tiling
         with ctx.tile("L3", [b3, h3, m3], "Spatial"):
-            with ctx.tile("L2", [b2, h2, m2, l3], "Temporal"):
+            with ctx.tile("L2", [b2, h2, m2], "Temporal"):  # Removed l3 to avoid multi-level tiling
                 with ctx.pipeline():
                     with ctx.pipeline():
                         with ctx.tile("L2", [b1, h1, m1], "Spatial"):
@@ -658,9 +658,9 @@ def attention_full_fusion_3levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hi
     l4, l3, l2, l1, l0 = ctx.split(l, factors=[*factors_l, 1])
 
     # Full fusion
-    with ctx.tile("L3", [b4, h4, m4, l4], "Temporal"):
+    with ctx.tile("L3", [b4, h4, m4], "Temporal"):  # Removed l4 to avoid multi-level tiling
         with ctx.tile("L3", [b3, h3, m3], "Spatial"):
-            with ctx.tile("L2", [b2, h2, m2, l3], "Temporal"):
+            with ctx.tile("L2", [b2, h2, m2], "Temporal"):  # Removed l3 to avoid multi-level tiling
                 with ctx.pipeline():
                     with ctx.parallel():
                         with ctx.tile("L2", [b1, h1, m1], "Spatial"):
@@ -671,7 +671,7 @@ def attention_full_fusion_3levels(ctx, tQ, tK, tV, batch, num_heads, seq_len, hi
                                             tQ[b, h, m, k] * tK[b, h, k, l]
                         with ctx.tile("L2", [b1, h1, m1], "Spatial"):
                             with ctx.tile("L1", [b0, h0, m0, l2], "Temporal"):
-                                with ctx.tile("L1", [b0, h0, m0], "Spatial"):
+                                with ctx.tile("L1", [l1], "Spatial"):  # Fixed: use l1 instead of repeating b0,h0,m0
                                     with ctx.tile("L0", [l0], "Temporal"):
                                         tB_max[b, h, m] = dir.max(tB_max[b, h, m], tA[b, h, m, l])
                                         tC[b, h, m, l] = tA[b, h, m, l] - tB_max[b, h, m]
