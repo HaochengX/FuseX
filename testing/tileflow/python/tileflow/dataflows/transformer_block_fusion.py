@@ -256,8 +256,8 @@ def transformer_block_no_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hidd
                     with ctx.tile("L1", [f1], "Spatial"):
                         with ctx.tile("L0", [f0], "Temporal"):
                             # GELU approximation: use x * sigmoid(x) = x / (1 + exp(-x))
-                            # (Simplified to avoid float*TensorView which isn't supported in IR)
-                            tGELU[b, m, f] = tFFN1[b, m, f] / (1 + dir.exp(-tFFN1[b, m, f]))
+                            # Use (0 - x) instead of -x to avoid unary negation on TensorView
+                            tGELU[b, m, f] = tFFN1[b, m, f] / (1 + dir.exp(0 - tFFN1[b, m, f]))
 
         # Stage 20: FFN layer 2 (GEMM on systolic)
         with ctx.tile("L2", [b2, m2], "Temporal"):
@@ -502,8 +502,8 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
                     with ctx.tile("L1", [f1], "Spatial"):
                         with ctx.tile("L0", [f0], "Temporal"):
                             # GELU approximation: use x * sigmoid(x) = x / (1 + exp(-x))
-                            # (Simplified to avoid float*TensorView which isn't supported in IR)
-                            tGELU[b, m, f] = tFFN1[b, m, f] / (1 + dir.exp(-tFFN1[b, m, f]))
+                            # Use (0 - x) instead of -x to avoid unary negation on TensorView
+                            tGELU[b, m, f] = tFFN1[b, m, f] / (1 + dir.exp(0 - tFFN1[b, m, f]))
 
         # FFN layer 2
         with ctx.tile("L2", [b2, m2], "Temporal"):
@@ -695,8 +695,8 @@ def transformer_block_full_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hi
                                 tFFN1[b, m, f] = tFFN1[b, m, f] + tNorm2[b, m, n] * tW1[n, f]
                                 # GELU FUSED with FFN1
                                 # GELU approximation: use x * sigmoid(x) = x / (1 + exp(-x))
-                            # (Simplified to avoid float*TensorView which isn't supported in IR)
-                            tGELU[b, m, f] = tFFN1[b, m, f] / (1 + dir.exp(-tFFN1[b, m, f]))
+                            # Use (0 - x) instead of -x to avoid unary negation on TensorView
+                            tGELU[b, m, f] = tFFN1[b, m, f] / (1 + dir.exp(0 - tFFN1[b, m, f]))
 
             with ctx.tile("L2", [b2, m2], "Temporal"):
                 with ctx.tile("L2", [b1, m1], "Spatial"):
