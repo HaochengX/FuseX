@@ -84,10 +84,12 @@ def transformer_block_no_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hidd
     tResid2 = dir.Tensor([batch, seq_len, hidden], name="Resid2", dtype="int16", ctx=ctx)
 
     # Weight tensors (assumed to exist)
-    tWQ = dir.Tensor([hidden, hidden], name="WQ", dtype="int16", ctx=ctx)
-    tWK = dir.Tensor([hidden, hidden], name="WK", dtype="int16", ctx=ctx)
-    tWV = dir.Tensor([hidden, hidden], name="WV", dtype="int16", ctx=ctx)
-    tWO = dir.Tensor([hidden, hidden], name="WO", dtype="int16", ctx=ctx)
+    # QKV weights are reshaped to multi-head format [hidden, num_heads, model_k]
+    tWQ = dir.Tensor([hidden, num_heads, model_k], name="WQ", dtype="int16", ctx=ctx)
+    tWK = dir.Tensor([hidden, num_heads, model_k], name="WK", dtype="int16", ctx=ctx)
+    tWV = dir.Tensor([hidden, num_heads, model_k], name="WV", dtype="int16", ctx=ctx)
+    # Output projection weights from multi-head format back to hidden
+    tWO = dir.Tensor([num_heads, model_k, hidden], name="WO", dtype="int16", ctx=ctx)
     tW1 = dir.Tensor([hidden, ff_dim], name="W1", dtype="int16", ctx=ctx)
     tW2 = dir.Tensor([ff_dim, hidden], name="W2", dtype="int16", ctx=ctx)
 
@@ -147,9 +149,9 @@ def transformer_block_no_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hidd
                 with ctx.tile("L1", [b0, m0, h2, k2, n2], "Temporal"):
                     with ctx.tile("L1", [h1, k1, n1], "Spatial"):
                         with ctx.tile("L0", [h0, k0, n0], "Temporal"):
-                            tQ[b, h, m, k] = tQ[b, h, m, k] + tNorm1[b, m, n] * tWQ[n, h*k]
-                            tK[b, h, k, m] = tK[b, h, k, m] + tNorm1[b, m, n] * tWK[n, h*k]
-                            tV[b, h, m, k] = tV[b, h, m, k] + tNorm1[b, m, n] * tWV[n, h*k]
+                            tQ[b, h, m, k] = tQ[b, h, m, k] + tNorm1[b, m, n] * tWQ[n, h, k]
+                            tK[b, h, k, m] = tK[b, h, k, m] + tNorm1[b, m, n] * tWK[n, h, k]
+                            tV[b, h, m, k] = tV[b, h, m, k] + tNorm1[b, m, n] * tWV[n, h, k]
 
         # Stage 7: Attention scores Q@K^T (GEMM on systolic)
         with ctx.tile("L2", [b2, h2, m2], "Temporal"):
@@ -205,7 +207,7 @@ def transformer_block_no_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hidd
                 with ctx.tile("L1", [b0, m0, n2, h2, k2], "Temporal"):
                     with ctx.tile("L1", [n1, h1, k1], "Spatial"):
                         with ctx.tile("L0", [n0, h0, k0], "Temporal"):
-                            tAttnProj[b, m, n] = tAttnProj[b, m, n] + tAttnOut[b, h, m, k] * tWO[h*k, n]
+                            tAttnProj[b, m, n] = tAttnProj[b, m, n] + tAttnOut[b, h, m, k] * tWO[h, k, n]
 
         # Stage 14: Residual connection 1 (CPU)
         with ctx.tile("L2", [b2, m2], "Temporal"):
@@ -324,10 +326,12 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
     tFFN2 = dir.Tensor([batch, seq_len, hidden], name="FFN2", dtype="int16", ctx=ctx)
     tResid2 = dir.Tensor([batch, seq_len, hidden], name="Resid2", dtype="int16", ctx=ctx)
 
-    tWQ = dir.Tensor([hidden, hidden], name="WQ", dtype="int16", ctx=ctx)
-    tWK = dir.Tensor([hidden, hidden], name="WK", dtype="int16", ctx=ctx)
-    tWV = dir.Tensor([hidden, hidden], name="WV", dtype="int16", ctx=ctx)
-    tWO = dir.Tensor([hidden, hidden], name="WO", dtype="int16", ctx=ctx)
+    # QKV weights are reshaped to multi-head format [hidden, num_heads, model_k]
+    tWQ = dir.Tensor([hidden, num_heads, model_k], name="WQ", dtype="int16", ctx=ctx)
+    tWK = dir.Tensor([hidden, num_heads, model_k], name="WK", dtype="int16", ctx=ctx)
+    tWV = dir.Tensor([hidden, num_heads, model_k], name="WV", dtype="int16", ctx=ctx)
+    # Output projection weights from multi-head format back to hidden
+    tWO = dir.Tensor([num_heads, model_k, hidden], name="WO", dtype="int16", ctx=ctx)
     tW1 = dir.Tensor([hidden, ff_dim], name="W1", dtype="int16", ctx=ctx)
     tW2 = dir.Tensor([ff_dim, hidden], name="W2", dtype="int16", ctx=ctx)
 
@@ -397,9 +401,9 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
                     with ctx.tile("L1", [b0, h0, m0, k2, n2], "Temporal"):
                         with ctx.tile("L1", [k1, n1], "Spatial"):
                             with ctx.tile("L0", [k0, n0], "Temporal"):
-                                tQ[b, h, m, k] = tQ[b, h, m, k] + tNorm1[b, m, n] * tWQ[n, h*k]
-                                tK[b, h, k, m] = tK[b, h, k, m] + tNorm1[b, m, n] * tWK[n, h*k]
-                                tV[b, h, m, k] = tV[b, h, m, k] + tNorm1[b, m, n] * tWV[n, h*k]
+                                tQ[b, h, m, k] = tQ[b, h, m, k] + tNorm1[b, m, n] * tWQ[n, h, k]
+                                tK[b, h, k, m] = tK[b, h, k, m] + tNorm1[b, m, n] * tWK[n, h, k]
+                                tV[b, h, m, k] = tV[b, h, m, k] + tNorm1[b, m, n] * tWV[n, h, k]
 
                 # Attention scores
                 with ctx.pipeline():
@@ -448,7 +452,7 @@ def transformer_block_attention_only_fusion_2levels(ctx, tX, batch, num_heads, s
                 with ctx.tile("L1", [b0, m0, n2, h2, k2], "Temporal"):
                     with ctx.tile("L1", [n1, h1, k1], "Spatial"):
                         with ctx.tile("L0", [n0, h0, k0], "Temporal"):
-                            tAttnProj[b, m, n] = tAttnProj[b, m, n] + tAttnOut[b, h, m, k] * tWO[h*k, n]
+                            tAttnProj[b, m, n] = tAttnProj[b, m, n] + tAttnOut[b, h, m, k] * tWO[h, k, n]
 
         # Residual - On VPU (on-chip), separate stage
         with ctx.tile("L2", [b2, m2], "Temporal"):
@@ -564,10 +568,12 @@ def transformer_block_full_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hi
     tFFN2 = dir.Tensor([batch, seq_len, hidden], name="FFN2", dtype="int16", ctx=ctx)
     tResid2 = dir.Tensor([batch, seq_len, hidden], name="Resid2", dtype="int16", ctx=ctx)
 
-    tWQ = dir.Tensor([hidden, hidden], name="WQ", dtype="int16", ctx=ctx)
-    tWK = dir.Tensor([hidden, hidden], name="WK", dtype="int16", ctx=ctx)
-    tWV = dir.Tensor([hidden, hidden], name="WV", dtype="int16", ctx=ctx)
-    tWO = dir.Tensor([hidden, hidden], name="WO", dtype="int16", ctx=ctx)
+    # QKV weights are reshaped to multi-head format [hidden, num_heads, model_k]
+    tWQ = dir.Tensor([hidden, num_heads, model_k], name="WQ", dtype="int16", ctx=ctx)
+    tWK = dir.Tensor([hidden, num_heads, model_k], name="WK", dtype="int16", ctx=ctx)
+    tWV = dir.Tensor([hidden, num_heads, model_k], name="WV", dtype="int16", ctx=ctx)
+    # Output projection weights from multi-head format back to hidden
+    tWO = dir.Tensor([num_heads, model_k, hidden], name="WO", dtype="int16", ctx=ctx)
     tW1 = dir.Tensor([hidden, ff_dim], name="W1", dtype="int16", ctx=ctx)
     tW2 = dir.Tensor([ff_dim, hidden], name="W2", dtype="int16", ctx=ctx)
 
@@ -626,9 +632,9 @@ def transformer_block_full_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hi
                         with ctx.tile("L1", [b0, h0, m0, k2, n2], "Temporal"):
                             with ctx.tile("L1", [k1, n1], "Spatial"):
                                 with ctx.tile("L0", [k0, n0], "Temporal"):
-                                    tQ[b, h, m, k] = tQ[b, h, m, k] + tNorm1[b, m, n] * tWQ[n, h*k]
-                                    tK[b, h, k, m] = tK[b, h, k, m] + tNorm1[b, m, n] * tWK[n, h*k]
-                                    tV[b, h, m, k] = tV[b, h, m, k] + tNorm1[b, m, n] * tWV[n, h*k]
+                                    tQ[b, h, m, k] = tQ[b, h, m, k] + tNorm1[b, m, n] * tWQ[n, h, k]
+                                    tK[b, h, k, m] = tK[b, h, k, m] + tNorm1[b, m, n] * tWK[n, h, k]
+                                    tV[b, h, m, k] = tV[b, h, m, k] + tNorm1[b, m, n] * tWV[n, h, k]
 
                     # Attention with softmax FULLY FUSED
                     with ctx.parallel():
@@ -662,7 +668,7 @@ def transformer_block_full_fusion_2levels(ctx, tX, batch, num_heads, seq_len, hi
                     with ctx.tile("L1", [b0, m0, n2, h2, k2], "Temporal"):
                         with ctx.tile("L1", [n1, h1, k1], "Spatial"):
                             with ctx.tile("L0", [n0, h0, k0], "Temporal"):
-                                tAttnProj[b, m, n] = tAttnProj[b, m, n] + tAttnOut[b, h, m, k] * tWO[h*k, n]
+                                tAttnProj[b, m, n] = tAttnProj[b, m, n] + tAttnOut[b, h, m, k] * tWO[h, k, n]
                                 tResid1[b, m, n] = tX[b, m, n] + tAttnProj[b, m, n]
 
             # LayerNorm2 FULLY FUSED
