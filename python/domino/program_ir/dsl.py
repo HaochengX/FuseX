@@ -723,6 +723,16 @@ def exp(value):
     return Call(value.dtype, "exp", [value])
 
 
+def sigmoid(value):
+    if isinstance(value, TensorView):
+        value = value.as_expr()
+    elif isinstance(value, Loop):
+        value = value.var
+    else:
+        value = _to_expr(value)
+    return Call(value.dtype, "sigmoid", [value])
+
+
 def make_const(value, dtype):
     dtype = DType.make(dtype)
     if dtype.is_int():
